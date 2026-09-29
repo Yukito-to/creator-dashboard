@@ -1111,7 +1111,7 @@ function renderS30() {
   }
   renderS30Body(biz);
 }
-/* 30S 明细：日期|时段 合并一列；有预测时追加「时段预测量 / 预测偏差」 */
+
 /* 30S 明细：按日期分组；每组上方插入「当日汇总」行 */
 function renderS30Body(biz) {
   const el = $('#s30Body');
@@ -1738,23 +1738,7 @@ function downloadExport() {
 function loadTargets() { try { return JSON.parse(localStorage.getItem('creator_kpi_target') || '{}'); } catch (_) { return {}; } }
 function saveTargets(t) { localStorage.setItem('creator_kpi_target', JSON.stringify(t)); }
 
-/* 读取 SLA 中各指标「100% 得分档位」的阈值作为目标值。
-   单位与内部存储一致：pct 型为小数（0.97），非 pct 型为原值（12、18）。
-   仅取分类为「整体 / 全部 / 合计 / 空」的行，避免首月/次月/老人混入。 */
-/* 读取 SLA 中各指标「100% 得分档位」的阈值作为目标值。
-   匹配优先级：
-     ① 「老人」分类（默认业务口径）
-     ② 「整体 / 全部 / 合计 / 总计 / 平均 / 总体 / 空」
-     ③ 任意其他分类兜底
-   单位与内部存储一致：pct 型为小数（0.97），非 pct 型为原值（12、18）。 */
-/* 读取 SLA 中各指标「100% 得分档位」的阈值作为目标值。
-   匹配优先级：
-     ① 「老人」分类（默认业务口径）
-     ② 「整体 / 全部 / 合计 / 总计 / 平均 / 总体 / 空」
-     ③ 任意其他分类兜底
-   单位与内部存储一致：pct 型为小数（0.97），非 pct 型为原值（12、18）。
-   注意：「得分」列若为 Excel 百分比格式，内部值可能是 1（=100%），
-        因此判断 100 分档时同时接受 100 与 1（≈1）。 */
+/* 读取 SLA 中各指标「100% 得分档位」的阈值作为目标值。 */
 function slaTargets100(biz) {
   const out = {};
   const src = bizToSrc(biz);
@@ -1772,7 +1756,6 @@ function slaTargets100(biz) {
     if (!c) return true;
     return c === '整体' || c === '全部' || c === '合计' || c === '总计' || c === '平均' || c === '总体';
   };
-  /* 100 分档判定：兼容 100（数字/文本）与 1（Excel 百分比的内部值） */
   const isFullScore = (points) => {
     const p = Number(points);
     if (!isFinite(p)) return false;
@@ -1781,7 +1764,6 @@ function slaTargets100(biz) {
     return false;
   };
 
-  /* 三轮：老人 → 整体类 → 其他 */
   for (const round of [1, 2, 3]) {
     for (const item of rawList) {
       const key = matchMetricKey(item.metric);
@@ -1800,9 +1782,9 @@ function slaTargets100(biz) {
       const m = METRIC_MAP[key];
       let v;
       if (m && m.pct) {
-        v = t100.threshold;                 // 已归一化成小数，如 0.97
+        v = t100.threshold;
       } else {
-        const raw = num(t100.rawThreshold); // 非 pct 指标用原始值
+        const raw = num(t100.rawThreshold);
         v = (isFinite(raw) && raw !== 0) ? raw : t100.threshold;
       }
       out[key] = v;
@@ -1846,7 +1828,6 @@ function renderTargetConfig() {
   const curMonth = S.month ? parseInt(S.month.slice(5,7), 10) : null;
   const slaMatchedCount = Object.keys(sla).length;
 
-  /* 状态提示：帮助快速定位为什么没带入 */
   let statusTip = '';
   if (!S.slaBuyer.length && !S.slaBlogger.length) {
     statusTip = '<span style="color:#C98383">⚠ 未检测到 SLA 数据（请确认导入文件中包含「买手员工SLA」/「博主员工SLA」sheet）</span>';
@@ -2124,7 +2105,6 @@ function s30AnalysisData(biz, wk) {
   const forecastMap = (biz === '买手合作') ? S.forecastBuyer : S.forecastBlogger;
   const hasFc = !!(forecastMap && Object.keys(forecastMap).length);
 
-  /* 日期 × 时段 明细 */
   const dpMap = new Map();
   for (const r of records) {
     const p = normPeriod(r.period) || '—';
@@ -2157,7 +2137,6 @@ function s30AnalysisData(biz, wk) {
   const totBias = totFc > 0 ? totDen / totFc : null;
   const fcCoverRate = totDen > 0 ? fcCover / totDen : 0;
 
-  /* 按日 */
   const dayMap = new Map();
   for (const o of dpList) {
     if (!dayMap.has(o.date)) dayMap.set(o.date, { date: o.date, num: 0, den: 0, forecast: 0, hasFc: false });
@@ -2172,7 +2151,6 @@ function s30AnalysisData(biz, wk) {
       rate, miss: o.den - o.num, hit: rate != null && rate >= th, bias };
   }).sort((a, b) => a.date < b.date ? -1 : 1);
 
-  /* 按时段 */
   const periodMap = new Map();
   for (const o of dpList) {
     const p = o.period;
@@ -2192,7 +2170,6 @@ function s30AnalysisData(biz, wk) {
     return String(a.period).localeCompare(String(b.period));
   });
 
-  /* 按员工 */
   const empMap = new Map();
   for (const r of records) {
     if (!r.name) continue;
@@ -2205,8 +2182,6 @@ function s30AnalysisData(biz, wk) {
     rate: o.den > 0 ? o.num / o.den : null, miss: o.den - o.num
   })).filter(o => o.den > 0).sort((a, b) => b.miss - a.miss);
 
-  /* 预测偏差分档：
-      超预测 > 120%，接近预测 100%~120%，低于预测 < 100% */
   const fcSlices = dpList.filter(o => o.hasFc && o.forecast > 0);
   const fcBuckets = {
     over:   { label: '超预测（>120%）', den: 0, miss: 0, cnt: 0 },
@@ -2241,7 +2216,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
 
   P.push('<h4 class="sub-title">🔍 30S 接起率 多维度归因分析</h4>');
 
-  /* ① 总体 */
   if (cur.hit) {
     P.push('<div class="rpt-sub">本周 30S 接起率 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 已达标（目标 ≥ ' + thPct + '%），无缺口。</div>');
   } else {
@@ -2249,7 +2223,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     P.push('<div class="rpt-sub" style="color:#D9363E;font-weight:600">⚠ 本周 30S 接起率 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 低于目标 <b>' + thPct + '%</b>，差距 <b>' + gapPp.toFixed(2) + 'pp</b>；按人工服务量 ' + fmtInt(cur.totDen) + ' 单计算，需至少多接起 <b>' + cur.gapNum + ' 单</b>才能达标。</div>');
   }
 
-  /* ② 预测量级维度 */
   if (cur.hasFc && cur.totFc > 0) {
     P.push('<div class="rpt-sub" style="margin-top:8px">📊 <b>预测量级维度</b></div>');
     const biasTxt = cur.totBias != null ? (cur.totBias * 100).toFixed(2) + '%' : '—';
@@ -2303,7 +2276,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     P.push('<div class="rpt-sub">' + insight + '</div>');
   }
 
-  /* ③ 日期维度 */
   if (cur.days.length) {
     P.push('<div class="rpt-sub" style="margin-top:8px">📅 <b>日期维度</b></div>');
     const cells = cur.days.map(d => {
@@ -2321,7 +2293,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     }
   }
 
-  /* ④ 时段维度 */
   if (cur.periods.length) {
     P.push('<div class="rpt-sub" style="margin-top:8px">⏰ <b>时段维度</b></div>');
     const missTotal = cur.periods.reduce((s, p) => s + p.miss, 0);
@@ -2345,7 +2316,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     }
   }
 
-  /* ⑤ 员工维度 */
   if (cur.emps.length) {
     P.push('<div class="rpt-sub" style="margin-top:8px">👤 <b>员工维度</b>（按 Miss 量降序 TOP5）</div>');
     const totalMiss = cur.emps.reduce((s, e) => s + e.miss, 0);
@@ -2376,7 +2346,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     }
   }
 
-  /* ⑥ 环比维度 */
   const prev = s30AnalysisData(biz, prevWk);
   if (prev && prev.totDen > 0) {
     const dRate = cur.totRate - prev.totRate;
@@ -2396,7 +2365,6 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     }
   }
 
-  /* ⑦ 改进建议（仅未达标时输出） */
   if (!cur.hit) {
     P.push('<div class="rpt-sub" style="margin-top:8px">💡 <b>改进建议</b></div>');
     const sg = [];
@@ -2674,7 +2642,6 @@ function reportHTML(d) {
     '<span>生成：' + new Date().toLocaleString('zh-CN') + '</span>' +
   '</div></div>');
 
-  /* ============ 一、周报数据汇报 ============ */
   P.push('<div class="rp-section"><h3>一、周报数据汇报</h3><div class="rpt-body">');
   P.push('<h4 class="sub-title">📊 核心指标</h4>');
   {
@@ -2728,7 +2695,6 @@ function reportHTML(d) {
     '</div>');
   }
 
-  /* 30S 接起卡片 + 多维度归因分析 */
   if (s30.week.cur.s30Den > 0) {
     P.push('<h4 class="sub-title">📞 30S 接起</h4>');
     const th = s30Threshold(biz);
@@ -2774,10 +2740,8 @@ function reportHTML(d) {
   }
   P.push('</div></div>');
 
-  /* ============ 二、人效部分 ============ */
   P.push('<div class="rp-section"><h3>二、人效部分</h3><div class="rpt-body">');
 
-  /* ① CPD */
   {
     const c = cur.cpd, cp = prev.cpd, cm = mCur.cpd;
     const cpdTgt = (tgt && tgt.cpd != null) ? Number(tgt.cpd) : null;
@@ -2799,7 +2763,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">' + s + '</div>');
   }
 
-  /* 接线量 + 拆分 + 排班人力 */
   {
     const bizShort = (biz === '博主合作') ? '博主' : '买手';
     const dv = cur.caseVolume - prev.caseVolume;
@@ -2821,7 +2784,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">本周' + bizShort + '排班人力：' + schWk.toFixed(2) + '（' + schPrev.toFixed(2) + '→' + schWk.toFixed(2) + '，' + dArrow(dmp) + Math.abs(dmp).toFixed(2) + '）</div>');
   }
 
-  /* 分类 CPD */
   for (const cat of ['老人','次月','首月']) {
     const b = byCat[cat];
     if (!b) continue;
@@ -2831,7 +2793,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">' + cat + 'CPD：' + num2(cc) + '（' + num2(pc) + '→' + num2(cc) + '，' + arrow + num2(Math.abs(dd || 0)) + '）</div>');
   }
 
-  /* ② AHT */
   {
     const a = cur.aht, ap = prev.aht, am = mCur.aht;
     const dd = (a != null && ap != null) ? a - ap : null;
@@ -2839,7 +2800,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line"><b>②AHT：</b>' + num2(a) + '，<span class="rpt-sep">|</span> 周度WoW：' + num2(dd) + arrow + ' <span class="rpt-sep">|</span> ' + monthLabel + '达成：' + num2(am) + '；</div>');
   }
 
-  /* ③ 并发 */
   {
     const c = cur.concurrency, cp = prev.concurrency, cm = mCur.concurrency;
     const dd = (c != null && cp != null) ? c - cp : null;
@@ -2847,7 +2807,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line"><b>③并发：</b>' + num2(c) + '，<span class="rpt-sep">|</span> 周度WoW：' + num2(dd) + arrow + ' <span class="rpt-sep">|</span> ' + monthLabel + '达成：' + num2(cm) + '；</div>');
   }
 
-  /* 分类并发 */
   for (const cat of ['老人','次月','首月']) {
     const b = byCat[cat];
     if (!b) continue;
@@ -2857,7 +2816,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">' + cat + '并发：' + num2(cc) + '（' + num2(pc) + '→' + num2(cc) + '，' + arrow + num2(Math.abs(dd || 0)) + '）</div>');
   }
 
-  /* ④ 30s接起率 */
   {
     const r = s30.week.cur.s30Rate, rp = s30.week.prev.s30Rate, rm = s30.month.cur.s30Rate;
     const dd = (r != null && rp != null) ? r - rp : null;
@@ -2881,14 +2839,12 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">' + s + '</div>');
   }
 
-  /* ⑤ 周度 CPD */
   {
     const c = cur.cpd, cp = prev.cpd;
     const dd = (c != null && cp != null) ? c - cp : null;
     P.push('<div class="rpt-line"><b>⑤周度：</b>' + num2(c) + '，【' + (dd == null ? '—' : (dd > 0 ? '+' : '') + dd.toFixed(2)) + '】</div>');
   }
 
-  /* 工时利用率 */
   {
     const u = cur.utilization, up = prev.utilization;
     const du = (u != null && up != null) ? u - up : null;
@@ -2896,7 +2852,6 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">本周工时利用率：' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '（' + (up != null ? (up*100).toFixed(2) + '%' : '—') + '→' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '，' + arrow + (du != null ? (Math.abs(du)*100).toFixed(2) + '%' : '—') + '）</div>');
   }
 
-  /* ⑥ 二级AHT（动态 TOP3） */
   {
     const aNow = cur.aht, aPrev = prev.aht;
     const ahtRose = (aNow != null && aPrev != null && aNow > aPrev);
@@ -2929,7 +2884,6 @@ function reportHTML(d) {
 
   P.push('</div></div>');
 
-  /* ============ 三、质量部分 ============ */
   P.push('<div class="rp-section"><h3>三、质量部分</h3><div class="rpt-body">');
   P.push('<div class="rpt-line">' + metricLineHTML('① 解决率：', cur.solveRate, prev.solveRate, mCur.solveRate, METRIC_MAP.solveRate, tgt, monthLabel) + '</div>');
   for (const cat of ['首月','次月','老人']) {
