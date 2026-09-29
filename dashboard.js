@@ -1139,7 +1139,7 @@ function renderS30Body(biz) {
     return String(a.period).localeCompare(String(b.period));
   });
 
-  /* ② 按日期分组，并累加当日汇总 */
+  /* ② 按日期分组，同时累加当日汇总 */
   const groups = [];
   const gIdx = new Map();
   for (const x of list) {
@@ -1183,10 +1183,10 @@ function renderS30Body(biz) {
   for (const g of groups) {
     const bg = bgMap[g.date] || '#fff';
 
-    /* 汇总行：加粗 + 顶部双线分隔，视觉上作为"组标题" */
+    /* 汇总行：加粗 + 顶部双线分隔 */
     const sumStyle = ' style="background:' + bg + ';font-weight:700;border-top:2px solid #C9C6BE;border-bottom:1px solid #D5D2CB"';
-    const rate = g.den > 0 ? g.num / g.den : null;
-    const miss = g.den - g.num;
+    const sumRate = g.den > 0 ? g.num / g.den : null;
+    const sumMiss = g.den - g.num;
     let sumExtra = '';
     if (hasFc) {
       const f = renderFc(g.hasFc ? g.forecast : null, g.den);
@@ -1195,10 +1195,10 @@ function renderS30Body(biz) {
     bodyParts.push(
       '<tr>' +
         '<td' + sumStyle + '>📅 ' + esc(g.date) + ' 当日汇总</td>' +
-        '<td' + sumStyle + '>' + rateSpan(rate, biz) + '</td>' +
+        '<td' + sumStyle + '>' + rateSpan(sumRate, biz) + '</td>' +
         '<td' + sumStyle + '>' + Math.round(g.num) + '</td>' +
         '<td' + sumStyle + '>' + Math.round(g.den) + '</td>' +
-        '<td' + sumStyle + '>' + Math.round(miss) + '</td>' +
+        '<td' + sumStyle + '>' + Math.round(sumMiss) + '</td>' +
         sumExtra +
       '</tr>'
     );
