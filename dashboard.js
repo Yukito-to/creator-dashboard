@@ -2362,9 +2362,26 @@ function s30AnalysisHTML(biz, wk, prevWk) {
           '<td style="text-align:center;color:' + weekColor + ';font-weight:600">' + weekDisp + '</td>' +
         '</tr>';
       }).join('');
-      P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
+            P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
         '<th>排名</th><th>日期 × 时段</th><th>预测量</th><th>实际量</th><th>超预测率</th><th>Miss</th><th>时段接起率</th><th>日度影响值</th><th>周度影响值</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>');
+
+      /* 📌 一句话总结 */
+      {
+        const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
+        const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
+        const totalImpact  = newWeekRate - cur.totRate;   // = totalMissAll / totDen
+        const worst        = impacts[0];                  // 已按 weekImpact 升序排序
+        const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
+        const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
+        P.push('<div class="rpt-sub" style="margin-top:8px;padding:10px 14px;background:#FAF9F7;border-radius:8px;border-left:3px solid #98A8CE;line-height:1.9">' +
+          '📌 <b>一句话总结：</b>本周共 <b>' + impacts.length + '</b> 个「超预测且接起不达标」的时段（累计 Miss <b>' + totalMissAll + '</b> 单，其中 TOP3 时段贡献 <b>' + top3Pct + '%</b>）；' +
+          '若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 提升至 <b>' + (newWeekRate * 100).toFixed(2) + '%</b>，' +
+          '即超预测对周度接起率的拖累约 <b style="color:#D9363E">' + (totalImpact * 100).toFixed(2) + 'pp</b>；' +
+          '影响最大的时段为 <b>' + esc(worst.date.slice(5)) + ' ' + esc(worst.period) + '时</b>' +
+          '（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 <b style="color:#D9363E">' + (worst.weekImpact * 100).toFixed(2) + 'pp</b>）。' +
+        '</div>');
+      }
     }
   }
 
@@ -2572,7 +2589,7 @@ function s30AnalysisText(biz, wk, prevWk) {
       L.push('- 符合条件时段共 **' + impacts.length + '** 个，累计 Miss **' + totalMiss + '** 单');
       L.push('- 负值表示该时段拉低整体接起率');
       L.push('');
-      L.push('| 排名 | 日期 × 时段 | 预测量 | 实际量 | 超预测率 | Miss | 时段接起率 | 日度影响值 | 周度影响值 |');
+            L.push('| 排名 | 日期 × 时段 | 预测量 | 实际量 | 超预测率 | Miss | 时段接起率 | 日度影响值 | 周度影响值 |');
       L.push('| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
       for (let i = 0; i < impacts.length; i++) {
         const x = impacts[i];
@@ -2583,6 +2600,18 @@ function s30AnalysisText(biz, wk, prevWk) {
           ' | ' + (x.rate * 100).toFixed(2) + '% | ' + dayDisp + ' | ' + weekDisp + ' |');
       }
       L.push('');
+
+      /* 📌 一句话总结 */
+      {
+        const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
+        const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
+        const totalImpact  = newWeekRate - cur.totRate;
+        const worst        = impacts[0];
+        const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
+        const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
+        L.push('📌 **一句话总结：** 本周共 **' + impacts.length + '** 个「超预测且接起不达标」的时段（累计 Miss **' + totalMissAll + '** 单，其中 TOP3 时段贡献 **' + top3Pct + '%**）；若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 **' + (cur.totRate * 100).toFixed(2) + '%** 提升至 **' + (newWeekRate * 100).toFixed(2) + '%**，即超预测对周度接起率的拖累约 **' + (totalImpact * 100).toFixed(2) + 'pp**；影响最大的时段为 **' + worst.date.slice(5) + ' ' + worst.period + '时**（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 **' + (worst.weekImpact * 100).toFixed(2) + 'pp**）。');
+        L.push('');
+      }
     }
   }
 
