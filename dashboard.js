@@ -1130,7 +1130,6 @@ function renderS30Body(biz) {
   const el = $('#s30Body');
   if (!el) return;
 
-  /* 顶部按钮状态同步（首次渲染 / 切换业务线时兜底） */
   const btnSum = $('#btnS30Sum');
   if (btnSum) {
     btnSum.textContent = S.s30ShowSummary ? '隐藏日汇总' : '显示日汇总';
@@ -1149,7 +1148,6 @@ function renderS30Body(biz) {
   const forecastMap = (biz === '买手合作') ? S.forecastBuyer : S.forecastBlogger;
   const hasFc = !!(forecastMap && Object.keys(forecastMap).length);
 
-  /* ① 按 日期|时段 聚合 */
   const map = {};
   for (const r of S.records) {
     if (r.biz !== biz) continue;
@@ -1164,7 +1162,6 @@ function renderS30Body(biz) {
     return String(a.period).localeCompare(String(b.period));
   });
 
-  /* ② 按日期分组，同时累加当日汇总 */
   const groups = [];
   const gIdx = new Map();
   for (const x of list) {
@@ -1186,7 +1183,6 @@ function renderS30Body(biz) {
   const head = '<tr><th>日期 | 时段</th><th>30s接起率</th><th>30S接起率-分子</th><th>30S接起率-分母</th><th>30sMiss量</th>' +
     (hasFc ? '<th>时段预测量</th><th>预测偏差</th>' : '') + '</tr>';
 
-  /* ③ 预测单元格渲染辅助 */
   const renderFc = (forecast, den) => {
     let fcDisp = '—', biasDisp = '—', biasCls = '';
     if (forecast != null && isFinite(forecast) && forecast > 0) {
@@ -1203,7 +1199,6 @@ function renderS30Body(biz) {
     };
   };
 
-  /* ④ 组装：日期汇总行（可显隐）+ 该日期下的时段明细 */
   const showSum = S.s30ShowSummary !== false;
   const bodyParts = [];
   for (const g of groups) {
@@ -1385,23 +1380,31 @@ function matchMetricKey(s) {
   for (const k of keys) if (n.includes(k)) return SLA_METRIC_ALIAS[k];
   return null;
 }
+
+/* ✅ 修改：SLA 员工维度计算（30S 接起率也按员工分类计算） */
 function slaAchieve(src, metricKey, category) {
   const monthSet = new Set([S.month]);
-  const biz = (src === 'buyer') ? '买手合作' : '博主合作';
-  if (metricKey === 's30Rate') {
-    const r = calcByL1(biz, { monthSet });
-    return r.s30Rate;
-  }
-  if (!category || category === '整体' || category === '全部') {
-    return calcBySrc(src, { monthSet })[metricKey];
-  }
   const srcEmps = srcEmployeeSet(src);
-  const names = S.roster
-    .filter(e => srcEmps.has(e.name) && (categoryOf(e, S.month) || '').includes(category))
-    .map(e => e.name);
-  if (!names.length) return null;
-  const nameSet = new Set(names);
-  return calcBySrc(src, { monthSet, nameSet })[metricKey];
+
+  /* 判断「整体」类分类（不按员工细分） */
+  const c = String(category == null ? '' : category).trim();
+  const isOverall = !c || c === '整体' || c === '全部' || c === '合计' || c === '总计' || c === '平均' || c === '总体';
+
+  /* 非整体分类：先按员工维度圈定人员 */
+  let nameSet = null;
+  if (!isOverall) {
+    const names = S.roster
+      .filter(e => srcEmps.has(e.name) && (categoryOf(e, S.month) || '').includes(c))
+      .map(e => e.name);
+    if (!names.length) return null;
+    nameSet = new Set(names);
+  }
+
+  /* 统一走 calcBySrc：所有指标（含 30S 接起率）都按员工维度计算
+     calcBySrc 内部通过 s30AggFor 按 nameSet 过滤 30S 分子/分母 */
+  const opts = { monthSet };
+  if (nameSet) opts.nameSet = nameSet;
+  return calcBySrc(src, opts)[metricKey];
 }
 
 function calcSlaScore(metricKey, actual, monthCfg) {
@@ -2153,7 +2156,14 @@ function s30AnalysisData(biz, wk) {
   const th = s30Threshold(biz);
   const hit = totRate >= th;
   const targetNum = th * totDen;
-  const gapNum = Math.max(0, Math.ceil(targetNum - totNum));
+  /* 30S 接起率缺口（仅未达标时计算，向上取整）：
+     设缺口为 X，使其满足 (接起分子 + X) / (接起分母 + X) = 目标值
+     解得：X = (目标值 × 分母 − 分子) / (1 − 目标值)
+     gapNum = ceil(X)，减 1e-9 抵消 JS 浮点误差 */
+  const gapRaw = (th * totDen - totNum) / (1 - th);
+  const gapNum = (!hit && th > 0 && th < 1 && isFinite(gapRaw))
+    ? Math.max(0, Math.ceil(gapRaw - 1e-9))
+    : null;
   const totBias = totFc > 0 ? totDen / totFc : null;
   const fcCoverRate = totDen > 0 ? fcCover / totDen : 0;
 
@@ -2281,7 +2291,10 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     P.push('<div class="rpt-sub">本周 30S 接起率 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 已达标（目标 ≥ ' + thPct + '%），无缺口。</div>');
   } else {
     const gapPp = (th - cur.totRate) * 100;
-    P.push('<div class="rpt-sub" style="color:#D9363E;font-weight:600">⚠ 本周 30S 接起率 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 低于目标 <b>' + thPct + '%</b>，差距 <b>' + gapPp.toFixed(2) + 'pp</b>；按人工服务量 ' + fmtInt(cur.totDen) + ' 单计算，需至少多接起 <b>' + cur.gapNum + ' 单</b>才能达标。</div>');
+    const gapTxt = (cur.gapNum != null)
+      ? '；按「（接起量 + 缺口）/（服务量 + 缺口）= ' + thPct + '%」测算，接起率缺口为 <b>' + cur.gapNum + ' 单</b>才能达标'
+      : '；目标值 ≥ 100%，无法通过增加接起量达成';
+    P.push('<div class="rpt-sub" style="color:#D9363E;font-weight:600">⚠ 本周 30S 接起率 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 低于目标 <b>' + thPct + '%</b>，差距 <b>' + gapPp.toFixed(2) + 'pp</b>' + gapTxt + '。</div>');
   }
 
   if (cur.hasFc && cur.totFc > 0) {
@@ -2362,26 +2375,24 @@ function s30AnalysisHTML(biz, wk, prevWk) {
           '<td style="text-align:center;color:' + weekColor + ';font-weight:600">' + weekDisp + '</td>' +
         '</tr>';
       }).join('');
-            P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
+      P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
         '<th>排名</th><th>日期 × 时段</th><th>预测量</th><th>实际量</th><th>超预测率</th><th>Miss</th><th>时段接起率</th><th>日度影响值</th><th>周度影响值</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>');
 
       /* 📌 一句话总结 */
-      {
-        const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
-        const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
-        const totalImpact  = newWeekRate - cur.totRate;   // = totalMissAll / totDen
-        const worst        = impacts[0];                  // 已按 weekImpact 升序排序
-        const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
-        const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
-        P.push('<div class="rpt-sub" style="margin-top:8px;padding:10px 14px;background:#FAF9F7;border-radius:8px;border-left:3px solid #98A8CE;line-height:1.9">' +
-          '📌 <b>一句话总结：</b>本周共 <b>' + impacts.length + '</b> 个「超预测且接起不达标」的时段（累计 Miss <b>' + totalMissAll + '</b> 单，其中 TOP3 时段贡献 <b>' + top3Pct + '%</b>）；' +
-          '若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 提升至 <b>' + (newWeekRate * 100).toFixed(2) + '%</b>，' +
-          '即超预测对周度接起率的拖累约 <b style="color:#D9363E">' + (totalImpact * 100).toFixed(2) + 'pp</b>；' +
-          '影响最大的时段为 <b>' + esc(worst.date.slice(5)) + ' ' + esc(worst.period) + '时</b>' +
-          '（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 <b style="color:#D9363E">' + (worst.weekImpact * 100).toFixed(2) + 'pp</b>）。' +
-        '</div>');
-      }
+      const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
+      const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
+      const totalImpact  = newWeekRate - cur.totRate;
+      const worst        = impacts[0];
+      const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
+      const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
+      P.push('<div class="rpt-sub" style="margin-top:8px;padding:10px 14px;background:#FAF9F7;border-radius:8px;border-left:3px solid #98A8CE;line-height:1.9">' +
+        '📌 <b>一句话总结：</b>本周共 <b>' + impacts.length + '</b> 个「超预测且接起不达标」的时段（累计 Miss <b>' + totalMissAll + '</b> 单，其中 TOP3 时段贡献 <b>' + top3Pct + '%</b>）；' +
+        '若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 <b>' + (cur.totRate * 100).toFixed(2) + '%</b> 提升至 <b>' + (newWeekRate * 100).toFixed(2) + '%</b>，' +
+        '即超预测对周度接起率的拖累约 <b style="color:#D9363E">' + (totalImpact * 100).toFixed(2) + 'pp</b>；' +
+        '影响最大的时段为 <b>' + esc(worst.date.slice(5)) + ' ' + esc(worst.period) + '时</b>' +
+        '（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 <b style="color:#D9363E">' + (worst.weekImpact * 100).toFixed(2) + 'pp</b>）。' +
+      '</div>');
     }
   }
 
@@ -2506,8 +2517,8 @@ function s30AnalysisHTML(biz, wk, prevWk) {
       const low = cur.emps.filter(e => e.den >= 20 && e.rate < th - 0.02).sort((a, b) => a.rate - b.rate).slice(0, 3);
       if (low.length) sg.push('【' + low.map(e => e.name).join('、') + '】等员工接起率明显低于目标，建议针对性话术/系统操作培训，必要时一对一辅导。');
     }
-    if (cur.gapNum > 0) {
-      let s = '按当前服务量，需至少多接起 <b>' + cur.gapNum + ' 单</b>才能达到 ' + thPct + '% 目标；若服务量继续增长，需同步扩大接起能力。';
+    if (cur.gapNum != null && cur.gapNum > 0) {
+      let s = '按「（接起量 + 缺口）/（服务量 + 缺口）= ' + thPct + '%」测算，需至少多接起 <b>' + cur.gapNum + ' 单</b>才能达标；若服务量继续增长，需同步扩大接起能力。';
       if (badFc) s += '（本周已出现超预测，扩容需以偏差率为基准，避免按预测值安排。）';
       sg.push(s);
     }
@@ -2531,7 +2542,10 @@ function s30AnalysisText(biz, wk, prevWk) {
     L.push('- 本周 30S 接起率 **' + (cur.totRate * 100).toFixed(2) + '%** 已达标（目标 ≥ ' + thPct + '%）。');
   } else {
     const gapPp = (th - cur.totRate) * 100;
-    L.push('- ⚠ 本周 30S 接起率 **' + (cur.totRate * 100).toFixed(2) + '%** 低于目标 **' + thPct + '%**，差距 **' + gapPp.toFixed(2) + 'pp**；按人工服务量 ' + cur.totDen + ' 单计算，需至少多接起 **' + cur.gapNum + ' 单**才能达标。');
+    const gapTxt = (cur.gapNum != null)
+      ? '；按「（接起量 + 缺口）/（服务量 + 缺口）= ' + thPct + '%」测算，接起率缺口为 **' + cur.gapNum + ' 单**才能达标'
+      : '；目标值 ≥ 100%，无法通过增加接起量达成';
+    L.push('- ⚠ 本周 30S 接起率 **' + (cur.totRate * 100).toFixed(2) + '%** 低于目标 **' + thPct + '%**，差距 **' + gapPp.toFixed(2) + 'pp**' + gapTxt + '。');
   }
   L.push('');
 
@@ -2589,7 +2603,7 @@ function s30AnalysisText(biz, wk, prevWk) {
       L.push('- 符合条件时段共 **' + impacts.length + '** 个，累计 Miss **' + totalMiss + '** 单');
       L.push('- 负值表示该时段拉低整体接起率');
       L.push('');
-            L.push('| 排名 | 日期 × 时段 | 预测量 | 实际量 | 超预测率 | Miss | 时段接起率 | 日度影响值 | 周度影响值 |');
+      L.push('| 排名 | 日期 × 时段 | 预测量 | 实际量 | 超预测率 | Miss | 时段接起率 | 日度影响值 | 周度影响值 |');
       L.push('| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
       for (let i = 0; i < impacts.length; i++) {
         const x = impacts[i];
@@ -2601,17 +2615,14 @@ function s30AnalysisText(biz, wk, prevWk) {
       }
       L.push('');
 
-      /* 📌 一句话总结 */
-      {
-        const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
-        const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
-        const totalImpact  = newWeekRate - cur.totRate;
-        const worst        = impacts[0];
-        const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
-        const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
-        L.push('📌 **一句话总结：** 本周共 **' + impacts.length + '** 个「超预测且接起不达标」的时段（累计 Miss **' + totalMissAll + '** 单，其中 TOP3 时段贡献 **' + top3Pct + '%**）；若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 **' + (cur.totRate * 100).toFixed(2) + '%** 提升至 **' + (newWeekRate * 100).toFixed(2) + '%**，即超预测对周度接起率的拖累约 **' + (totalImpact * 100).toFixed(2) + 'pp**；影响最大的时段为 **' + worst.date.slice(5) + ' ' + worst.period + '时**（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 **' + (worst.weekImpact * 100).toFixed(2) + 'pp**）。');
-        L.push('');
-      }
+      const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
+      const newWeekRate  = (cur.totNum + totalMissAll) / cur.totDen;
+      const totalImpact  = newWeekRate - cur.totRate;
+      const worst        = impacts[0];
+      const top3Miss     = impacts.slice(0, 3).reduce((s, x) => s + x.miss, 0);
+      const top3Pct      = totalMissAll > 0 ? (top3Miss / totalMissAll * 100).toFixed(1) : '0';
+      L.push('📌 **一句话总结：** 本周共 **' + impacts.length + '** 个「超预测且接起不达标」的时段（累计 Miss **' + totalMissAll + '** 单，其中 TOP3 时段贡献 **' + top3Pct + '%**）；若将这些 Miss 全部回补至接起量，周度 30S 接起率将从 **' + (cur.totRate * 100).toFixed(2) + '%** 提升至 **' + (newWeekRate * 100).toFixed(2) + '%**，即超预测对周度接起率的拖累约 **' + (totalImpact * 100).toFixed(2) + 'pp**；影响最大的时段为 **' + worst.date.slice(5) + ' ' + worst.period + '时**（偏差 ' + (worst.bias * 100).toFixed(0) + '%，Miss ' + worst.miss + '，周度影响 **' + (worst.weekImpact * 100).toFixed(2) + 'pp**）。');
+      L.push('');
     }
   }
 
@@ -2701,8 +2712,8 @@ function s30AnalysisText(biz, wk, prevWk) {
       const low = cur.emps.filter(e => e.den >= 20 && e.rate < th - 0.02).sort((a, b) => a.rate - b.rate).slice(0, 3);
       if (low.length) sg.push('【' + low.map(e => e.name).join('、') + '】等员工接起率明显低于目标，建议针对性话术/系统操作培训，必要时一对一辅导。');
     }
-    if (cur.gapNum > 0) {
-      let s = '按当前服务量，需至少多接起 **' + cur.gapNum + ' 单**才能达到 ' + thPct + '% 目标；若服务量继续增长，需同步扩大接起能力。';
+    if (cur.gapNum != null && cur.gapNum > 0) {
+      let s = '按「（接起量 + 缺口）/（服务量 + 缺口）= ' + thPct + '%」测算，需至少多接起 **' + cur.gapNum + ' 单**才能达标；若服务量继续增长，需同步扩大接起能力。';
       if (badFc) s += '（本周已出现超预测，扩容需以偏差率为基准，避免按预测值安排。）';
       sg.push(s);
     }
@@ -2995,6 +3006,7 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">本周工时利用率：' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '（' + (up != null ? (up*100).toFixed(2) + '%' : '—') + '→' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '，' + arrow + (du != null ? (Math.abs(du)*100).toFixed(2) + '%' : '—') + '）</div>');
   }
 
+  /* ⑥二级AHT：新逻辑（负贡献且上升 / 正贡献且下降） */
   {
     const aNow = cur.aht, aPrev = prev.aht;
     const ahtRose = (aNow != null && aPrev != null && aNow > aPrev);
@@ -3002,17 +3014,25 @@ function reportHTML(d) {
     const list = aht2.list.filter(o => o.volNow > 0 || o.volPrev > 0);
     let top3 = [];
     if (ahtRose) {
-      top3 = list.filter(o => o.impact != null && o.impact > 0)
-                 .sort((x, y) => y.impact - x.impact).slice(0, 3);
+      top3 = list.filter(o =>
+                o.impact != null && o.impact < 0 &&
+                o.ahtNow != null && o.ahtPrev != null && o.ahtNow > o.ahtPrev
+              )
+              .sort((x, y) => x.impact - y.impact)
+              .slice(0, 3);
     } else if (ahtFell) {
-      top3 = list.filter(o => o.impact != null && o.impact < 0)
-                 .sort((x, y) => x.impact - y.impact).slice(0, 3);
+      top3 = list.filter(o =>
+                o.impact != null && o.impact > 0 &&
+                o.ahtNow != null && o.ahtPrev != null && o.ahtNow < o.ahtPrev
+              )
+              .sort((x, y) => y.impact - x.impact)
+              .slice(0, 3);
     } else {
       top3 = list.filter(o => o.impact != null)
                  .sort((x, y) => Math.abs(y.impact) - Math.abs(x.impact)).slice(0, 3);
     }
     const tag = ahtRose ? '负贡献' : (ahtFell ? '正贡献' : '影响值');
-    P.push('<div class="rpt-line"><b>⑥二级AHT</b>（按影响值大小排序，当周度 AHT 上升时，则展示负贡献前三的二级AHT；当周度 AHT 下降时，则展示正贡献前三的二级AHT；当周度 AHT 持平，则展示影响值绝对值前三的二级AHT）</div>');
+    P.push('<div class="rpt-line"><b>⑥二级AHT</b>（按影响值大小排序：当周度 AHT 上升时，展示负贡献且自身 AHT 上升的二级AHT；当周度 AHT 下降时，展示正贡献且自身 AHT 下降的二级AHT；当周度 AHT 持平，则展示影响值绝对值前三的二级AHT）</div>');
     if (!top3.length) P.push('<div class="rpt-sub">暂无数据</div>');
     else for (const o of top3) {
       const key = 'aht2r|' + wk + '|' + o.l1 + '|' + o.l2;
@@ -3259,17 +3279,31 @@ function reportToText(d) {
     L.push('本周工时利用率：' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '（' + (up != null ? (up*100).toFixed(2) + '%' : '—') + '→' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '，' + arrow + (du != null ? (Math.abs(du)*100).toFixed(2) + '%' : '—') + '）');
   }
 
+  /* ⑥二级AHT：新逻辑 */
   {
     const aNow = cur.aht, aPrev = prev.aht;
     const ahtRose = (aNow != null && aPrev != null && aNow > aPrev);
     const ahtFell = (aNow != null && aPrev != null && aNow < aPrev);
     const list = aht2.list.filter(o => o.volNow > 0 || o.volPrev > 0);
     let top3 = [];
-    if (ahtRose) top3 = list.filter(o => o.impact != null && o.impact > 0).sort((x, y) => y.impact - x.impact).slice(0, 3);
-    else if (ahtFell) top3 = list.filter(o => o.impact != null && o.impact < 0).sort((x, y) => x.impact - y.impact).slice(0, 3);
-    else top3 = list.filter(o => o.impact != null).sort((x, y) => Math.abs(y.impact) - Math.abs(x.impact)).slice(0, 3);
+    if (ahtRose) {
+      top3 = list.filter(o =>
+                o.impact != null && o.impact < 0 &&
+                o.ahtNow != null && o.ahtPrev != null && o.ahtNow > o.ahtPrev
+              )
+              .sort((x, y) => x.impact - y.impact).slice(0, 3);
+    } else if (ahtFell) {
+      top3 = list.filter(o =>
+                o.impact != null && o.impact > 0 &&
+                o.ahtNow != null && o.ahtPrev != null && o.ahtNow < o.ahtPrev
+              )
+              .sort((x, y) => y.impact - x.impact).slice(0, 3);
+    } else {
+      top3 = list.filter(o => o.impact != null)
+                 .sort((x, y) => Math.abs(y.impact) - Math.abs(x.impact)).slice(0, 3);
+    }
     const tag = ahtRose ? '负贡献' : (ahtFell ? '正贡献' : '影响值');
-    L.push('⑥二级AHT（按影响值大小排序，当周度 AHT 上升时，则展示负贡献前三的二级AHT；当周度 AHT 下降时，则展示正贡献前三的二级AHT；当周度 AHT 持平，则展示影响值绝对值前三的二级AHT）');
+    L.push('⑥二级AHT（按影响值大小排序：当周度 AHT 上升时，展示负贡献且自身 AHT 上升的二级AHT；当周度 AHT 下降时，展示正贡献且自身 AHT 下降的二级AHT；当周度 AHT 持平，则展示影响值绝对值前三的二级AHT）');
     if (!top3.length) L.push('暂无数据');
     else for (const o of top3) {
       const key = 'aht2r|' + wk + '|' + o.l1 + '|' + o.l2;
