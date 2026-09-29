@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#A9B7D9">
+<title>创作者数据分析</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">📊</div>
+    <div>
+      <h1>创作者数据分析</h1>
+      <span class="sub">本地解析 · 数据不出本机</span>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="dataStatus" class="pill pill-off">未导入</span>
+    <label class="switch"><input type="checkbox" id="hideLeft"><span>隐藏已离职</span></label>
+    <button id="btnReset" class="btn ghost">重置</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-view="import" class="active">📥 导入</button>
+  <button data-view="mapping">🔗 映射</button>
+  <button data-view="roster">👥 花名册</button>
+  <button data-view="overview">📊 达成</button>
+  <button data-view="person">🧑 员工</button>
+  <button data-view="team">🏢 团队</button>
+  <button data-view="s30">📞 30S</button>
+  <button data-view="aht2">📈 AHT</button>
+  <button data-view="sla">🎯 达成SLA</button>
+  <button data-view="attendance">🗓 出勤</button>
+  <button data-view="export">🖼 导出</button>
+  <button data-view="report">📄 周报</button>
+</nav>
+
+<main>
+  <section id="view-import" class="view active">
+    <div class="card">
+      <h2>导入数据表格</h2>
+      <p class="muted">支持 .xlsx / .xlsm / .csv。解析在本机完成，数据不会上传。</p>
+      <div id="dropZone" class="dropzone">
+        <div class="drop-icon">⬆</div>
+        <div class="drop-text">点击选择文件</div>
+        <div class="drop-hint">自动识别：花名册 / 员工数据 / 质检 / 工时 / 业务线映射 / 二级打点映射 / 班次 / 班表 / 员工SLA</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv" hidden>
+      </div>
+      <div id="progressWrap" class="progress-wrap hidden">
+        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+        <div class="progress-meta">
+          <span id="progressText">准备中…</span>
+          <span id="progressPct">0%</span>
+        </div>
+      </div>
+      <div id="importSummary" class="summary-grid"></div>
+    </div>
+  </section>
+
+  <section id="view-mapping" class="view">
+    <div class="card">
+      <h2>字段映射 <span class="help" data-tip="系统自动抓取字段，可手动调整。">?</span></h2>
+      <div id="mappingBody"></div>
+    </div>
+  </section>
+
+  <section id="view-roster" class="view">
+    <div class="card">
+      <h2>花名册 <span class="help" data-tip="可设置离职日期；离职员工自动沉底。">?</span></h2>
+      <div class="roster-toolbar">
+        <input type="text" id="rosterSearch" placeholder="🔍 搜索姓名 / 组别 / 批次 / 属性">
+        <span class="muted" id="rosterCount"></span>
+      </div>
+      <div class="table-scroll" id="rosterTable"></div>
+    </div>
+  </section>
+
+  <section id="view-overview" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>整体达成情况 <span class="help" data-tip="CASE 处理量按三种口径展示。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="ovBiz"></select></label>
+        </div>
+      </div>
+      <div id="ovBody"></div>
+    </div>
+  </section>
+
+  <section id="view-person" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>员工看板 <span class="help" data-tip="先选业务线 → 勾选指标 → 点姓名选员工。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="peBiz"></select></label>
+          <label class="chk"><input type="checkbox" id="peAll"> 全选一线</label>
+          <button class="btn sm" id="peToggle">折叠</button>
+        </div>
+      </div>
+      <div class="dims">
+        <div class="dim-row">
+          <span class="dim-label">指标</span>
+          <div id="peMetric" class="chips" style="margin:0"></div>
+        </div>
+      </div>
+      <div id="peNames" class="chips"></div>
+      <div id="peBody" class="table-scroll"></div>
+    </div>
+  </section>
+
+  <section id="view-team" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>团队看板 <span class="help" data-tip="先选业务线 → 勾选指标 → 再按组别 / 批次 / 分类多选。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="tmBiz"></select></label>
+        </div>
+      </div>
+      <div class="dims">
+        <div class="dim-row">
+          <span class="dim-label">指标</span>
+          <div id="tmMetric" class="chips" style="margin:0"></div>
+        </div>
+      </div>
+      <div id="tmDims" class="dims"></div>
+      <div id="tmBody" class="table-scroll"></div>
+    </div>
+  </section>
+
+  <section id="view-s30" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>30S 接起 <span class="help" data-tip="按一级打点业务线计算。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="s30Biz"></select></label>
+        </div>
+      </div>
+      <div id="s30Top"></div>
+      <h3 class="sub-title">日期 × 时段明细</h3>
+      <div id="s30Dates" class="chips"></div>
+      <div id="s30Body" class="table-scroll"></div>
+    </div>
+  </section>
+
+  <section id="view-aht2" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>二级打点 AHT <span class="help" data-tip="按「一级+二级打点」精准匹配。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="a2Biz"></select></label>
+        </div>
+      </div>
+      <div id="a2Body" class="table-scroll"></div>
+    </div>
+  </section>
+
+  <section id="view-sla" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>达成 SLA <span class="help" data-tip="按业务线读取对应员工SLA sheet 中的「指标 / 分类 / 月度目标」：分类为『整体』时对比该业务线整体月度达成，其他分类（首月 / 次月 / 老人）匹配员工月度分类。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="slaBiz"></select></label>
+        </div>
+      </div>
+      <div id="slaBody"></div>
+    </div>
+  </section>
+
+  <section id="view-attendance" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>出勤看板 <span class="help" data-tip="日度出勤可手动调整 0~1。">?</span></h2>
+        <div class="head-controls">
+          <label>员工 <select id="attName"></select></label>
+        </div>
+      </div>
+      <div id="attBody"></div>
+    </div>
+  </section>
+
+  <section id="view-export" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>导出图表 <span class="help" data-tip="生成 PNG 图片。">?</span></h2>
+        <div class="head-controls">
+          <button id="btnPreview" class="btn primary">生成预览</button>
+          <button id="btnExport" class="btn ghost2" disabled>下载图片</button>
+        </div>
+      </div>
+      <div class="export-filters">
+        <div class="dim-row"><span class="dim-label">业务线</span><select id="exBiz" class="dim-select"></select></div>
+        <div class="dim-row"><span class="dim-label">指标</span><div id="exMetric" class="chips" style="margin:0"></div></div>
+        <div class="dim-row"><span class="dim-label">组别</span><div id="exGroup" class="chips" style="margin:0"></div></div>
+        <div class="dim-row"><span class="dim-label">批次</span><div id="exBatch" class="chips" style="margin:0"></div></div>
+        <div class="dim-row"><span class="dim-label">分类</span><div id="exCategory" class="chips" style="margin:0"></div></div>
+      </div>
+      <div id="exPreview" class="preview-box"><div class="muted">选择条件后点击「生成预览」。</div></div>
+    </div>
+  </section>
+
+  <section id="view-report" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>周报输出 <span class="help" data-tip="目标值可手动填写，留空不算达成。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="rpBiz"></select></label>
+          <label>周次 <select id="rpWK"></select></label>
+        </div>
+        <div class="head-controls">
+          <button id="btnRpCopy" class="btn sm" disabled>📋 复制</button>
+          <button id="btnRpMd" class="btn sm" disabled>⬇ Markdown</button>
+        </div>
+      </div>
+      <div class="target-panel">
+        <h3>🎯 目标设置 <span class="help" data-tip="百分比指标填数字（如 95 表示 95%），留空不算。">?</span></h3>
+        <div class="target-grid" id="targetGrid"></div>
+      </div>
+      <div id="rpBody"></div>
+    </div>
+  </section>
+</main>
+
+<script src="lib/xlsx.js"></script>
+<script src="dashboard.js"></script>
+</body>
+</html>
