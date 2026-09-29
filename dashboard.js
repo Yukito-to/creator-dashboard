@@ -1112,65 +1112,122 @@ function renderS30() {
   renderS30Body(biz);
 }
 /* 30S 明细：日期|时段 合并一列；有预测时追加「时段预测量 / 预测偏差」 */
+/* 30S 明细：按日期分组；每组上方插入「当日汇总」行 */
 function renderS30Body(biz) {
   const el = $('#s30Body');
   if (!el) return;
   const dates = Array.from(S.s30Dates).sort();
   if (!dates.length) { el.innerHTML = '<p class="muted">请选择日期。</p>'; return; }
+
   const bgMap = {};
   dates.forEach((d, i) => bgMap[d] = DATE_BG[i % DATE_BG.length]);
   const forecastMap = (biz === '买手合作') ? S.forecastBuyer : S.forecastBlogger;
+  const hasFc = !!(forecastMap && Object.keys(forecastMap).length);
 
+  /* ① 按 日期|时段 聚合 */
   const map = {};
   for (const r of S.records) {
     if (r.biz !== biz) continue;
     if (!S.s30Dates.has(r.date)) continue;
     const key = r.date + '|' + (r.period || '—');
-    if (!map[key]) map[key] = { date: r.date, period: r.period || '—', num:0, den:0 };
-    map[key].num += r.s30Num; map[key].den += r.s30Den;
+    if (!map[key]) map[key] = { date: r.date, period: r.period || '—', num: 0, den: 0 };
+    map[key].num += r.s30Num;
+    map[key].den += r.s30Den;
   }
   const list = Object.values(map).sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? -1 : 1;
     return String(a.period).localeCompare(String(b.period));
   });
 
-  const hasFc = !!(forecastMap && Object.keys(forecastMap).length);
+  /* ② 按日期分组，并累加当日汇总 */
+  const groups = [];
+  const gIdx = new Map();
+  for (const x of list) {
+    let g = gIdx.get(x.date);
+    if (!g) {
+      g = { date: x.date, rows: [], num: 0, den: 0, forecast: 0, hasFc: false };
+      gIdx.set(x.date, g);
+      groups.push(g);
+    }
+    g.rows.push(x);
+    g.num += x.num;
+    g.den += x.den;
+    if (hasFc) {
+      const fc = forecastMap[x.date + '|' + normPeriod(x.period)];
+      if (fc != null && isFinite(fc) && fc > 0) { g.forecast += fc; g.hasFc = true; }
+    }
+  }
+
   const head = '<tr><th>日期 | 时段</th><th>30s接起率</th><th>30S接起率-分子</th><th>30S接起率-分母</th><th>30sMiss量</th>' +
     (hasFc ? '<th>时段预测量</th><th>预测偏差</th>' : '') + '</tr>';
 
-  const body = list.map(x => {
-    const rate = x.den > 0 ? x.num / x.den : null;
-    const miss = x.den - x.num;
-    const style = ' style="background:' + (bgMap[x.date] || '#fff') + '"';
-    const dateTime = esc(x.date) + ' | ' + esc(x.period);
-
-    let extra = '';
-    if (hasFc) {
-      const fcKey = x.date + '|' + normPeriod(x.period);
-      const fcVal = forecastMap[fcKey];
-      let fcDisp = '—';
-      let biasDisp = '—';
-      let biasCls = '';
-      if (fcVal != null && isFinite(fcVal) && fcVal > 0) {
-        fcDisp = String(Math.round(fcVal * 100) / 100);
-        const bias = (x.den / fcVal) * 100;
-        if (isFinite(bias)) {
-          biasDisp = bias.toFixed(2) + '%';
-          if (bias > 120) biasCls = 'bias-over';
-        }
+  /* ③ 预测单元格渲染辅助 */
+  const renderFc = (forecast, den) => {
+    let fcDisp = '—', biasDisp = '—', biasCls = '';
+    if (forecast != null && isFinite(forecast) && forecast > 0) {
+      fcDisp = String(Math.round(forecast * 100) / 100);
+      const bias = (den / forecast) * 100;
+      if (isFinite(bias)) {
+        biasDisp = bias.toFixed(2) + '%';
+        if (bias > 120) biasCls = 'bias-over';
       }
-      extra = '<td' + style + '>' + fcDisp + '</td>' +
-              '<td' + style + '>' + (biasCls ? '<span class="' + biasCls + '">' + biasDisp + '</span>' : biasDisp) + '</td>';
     }
+    return {
+      fc: fcDisp,
+      bias: biasCls ? '<span class="' + biasCls + '">' + biasDisp + '</span>' : biasDisp
+    };
+  };
 
-    return '<tr><td' + style + '>' + dateTime + '</td>' +
-      '<td' + style + '>' + rateSpan(rate, biz) + '</td>' +
-      '<td' + style + '>' + Math.round(x.num) + '</td>' +
-      '<td' + style + '>' + Math.round(x.den) + '</td>' +
-      '<td' + style + '>' + Math.round(miss) + '</td>' +
-      extra + '</tr>';
-  }).join('');
-  el.innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  /* ④ 组装：日期汇总行 + 该日期下的时段明细 */
+  const bodyParts = [];
+  for (const g of groups) {
+    const bg = bgMap[g.date] || '#fff';
+
+    /* 汇总行：加粗 + 顶部双线分隔，视觉上作为"组标题" */
+    const sumStyle = ' style="background:' + bg + ';font-weight:700;border-top:2px solid #C9C6BE;border-bottom:1px solid #D5D2CB"';
+    const rate = g.den > 0 ? g.num / g.den : null;
+    const miss = g.den - g.num;
+    let sumExtra = '';
+    if (hasFc) {
+      const f = renderFc(g.hasFc ? g.forecast : null, g.den);
+      sumExtra = '<td' + sumStyle + '>' + f.fc + '</td><td' + sumStyle + '>' + f.bias + '</td>';
+    }
+    bodyParts.push(
+      '<tr>' +
+        '<td' + sumStyle + '>📅 ' + esc(g.date) + ' 当日汇总</td>' +
+        '<td' + sumStyle + '>' + rateSpan(rate, biz) + '</td>' +
+        '<td' + sumStyle + '>' + Math.round(g.num) + '</td>' +
+        '<td' + sumStyle + '>' + Math.round(g.den) + '</td>' +
+        '<td' + sumStyle + '>' + Math.round(miss) + '</td>' +
+        sumExtra +
+      '</tr>'
+    );
+
+    /* 明细行 */
+    for (const x of g.rows) {
+      const r = x.den > 0 ? x.num / x.den : null;
+      const m = x.den - x.num;
+      const style = ' style="background:' + bg + '"';
+      let extra = '';
+      if (hasFc) {
+        const fc = forecastMap[x.date + '|' + normPeriod(x.period)];
+        const f = renderFc(fc, x.den);
+        extra = '<td' + style + '>' + f.fc + '</td><td' + style + '>' + f.bias + '</td>';
+      }
+      bodyParts.push(
+        '<tr>' +
+          '<td' + style + '>' + esc(x.date) + ' | ' + esc(x.period) + '</td>' +
+          '<td' + style + '>' + rateSpan(r, biz) + '</td>' +
+          '<td' + style + '>' + Math.round(x.num) + '</td>' +
+          '<td' + style + '>' + Math.round(x.den) + '</td>' +
+          '<td' + style + '>' + Math.round(m) + '</td>' +
+          extra +
+        '</tr>'
+      );
+    }
+  }
+
+  el.innerHTML = '<table><thead>' + head + '</thead><tbody>' + bodyParts.join('') + '</tbody></table>';
 }
 
 /* 二级AHT：以最新 WK 与其前一周对比 */
