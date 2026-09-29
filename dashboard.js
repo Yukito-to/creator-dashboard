@@ -52,7 +52,7 @@ const BLOGGER_AHT2_ORDER = [['博主合作','蒲公英准入/准出'],['博主�
 const normAHT2 = s => String(s == null ? '' : s).replace(/\uFF08/g,'(').replace(/\uFF09/g,')').replace(/\uFF0F/g,'/').replace(/\u3000/g,'').replace(/\s+/g,'').toLowerCase();
 const aht2Key = (l1, l2) => normAHT2(l1) + '|' + normAHT2(l2);
 
-const S = { fileName:'', sheets:{}, headers:{}, mapping:{}, roster:[], records:[], wtRecords:[], inspections:[], slaBuyer:[], slaBlogger:[], businessMap:{}, business2Map:{}, shiftMap:{}, schedule:{}, scheduleDates:[], month:'', latestDate:'', latestWK:0, hidden:false, attOverride:{}, personSel:new Set(), teamSel:{ group:new Set(), batch:new Set(), category:new Set() }, s30Dates:new Set(), expandedRows:new Set(), forecastBuyer:{}, forecastBlogger:{} };
+const S = { fileName:'', sheets:{}, headers:{}, mapping:{}, roster:[], records:[], wtRecords:[], inspections:[], slaBuyer:[], slaBlogger:[], businessMap:{}, business2Map:{}, shiftMap:{}, schedule:{}, scheduleDates:[], month:'', latestDate:'', latestWK:0, hidden:false, attOverride:{}, personSel:new Set(), teamSel:{ group:new Set(), batch:new Set(), category:new Set() }, s30Dates:new Set(), s30ShowSummary:true, expandedRows:new Set(), forecastBuyer:{}, forecastBlogger:{} };
 
 const num = v => { if (v===''||v==null) return 0; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
 const fmtVal = (n,m) => { if (n==null||!isFinite(n)) return '—'; if (m.pct) return (n*100).toFixed(m.digits)+'%'; return n.toFixed(m.digits); };
@@ -261,7 +261,6 @@ function parseRoster() {
     S.roster.push(emp);
   }
 
-  /* localStorage 记忆覆盖：用户在「花名册」页手动改过的离职日期优先级更高 */
   try {
     const memo = JSON.parse(localStorage.getItem('creator_roster_memo') || '{}');
     if (memo.resign) for (const e of S.roster) if (memo.resign[e.name]) e.resignDate = memo.resign[e.name];
@@ -284,7 +283,6 @@ function bizByL1L2(l1, l2, defaultBiz) {
   return { biz: '博主合作', l1: '博主合作', l2: '博主其他' };
 }
 
-/* ===== 时段规范化：'09' / '9:00' / 9 → '9' ===== */
 function normPeriod(p) {
   const s = String(p == null ? '' : p).trim();
   if (!s) return '';
@@ -293,7 +291,6 @@ function normPeriod(p) {
   return s;
 }
 
-/* ===== 预测宽表解析：行=时段，列=日期 ===== */
 function parseForecastSheet(kind) {
   const sheet = S.sheets[kind];
   if (!sheet) return {};
@@ -335,7 +332,6 @@ function parseForecastSheet(kind) {
   return out;
 }
 
-/* ===== SLA 宽表解析 ===== */
 function normPctVal(v) {
   const n = num(v);
   if (!isFinite(n)) return null;
@@ -898,7 +894,6 @@ function renderOverview() {
   });
 }
 
-/* 员工看板：不展示 30S接起率（打点级指标，无员工维度） */
 function refreshPersonOptions() {
   const em = ensureChipContainer('peMetric');
   if (!em) return;
@@ -1112,10 +1107,40 @@ function renderS30() {
   renderS30Body(biz);
 }
 
-/* 30S 明细：按日期分组；每组上方插入「当日汇总」行 */
+/* 颜色加深工具：用于「当日汇总」行背景 */
+function darkenColor(hex, factor) {
+  if (!hex || typeof hex !== 'string' || hex[0] !== '#') return hex;
+  let r, g, b;
+  if (hex.length === 4) {
+    r = parseInt(hex[1]+hex[1], 16);
+    g = parseInt(hex[2]+hex[2], 16);
+    b = parseInt(hex[3]+hex[3], 16);
+  } else {
+    r = parseInt(hex.slice(1,3), 16);
+    g = parseInt(hex.slice(3,5), 16);
+    b = parseInt(hex.slice(5,7), 16);
+  }
+  const f = factor || 0.88;
+  const to2 = c => Math.max(0, Math.round(c * f)).toString(16).padStart(2, '0');
+  return '#' + to2(r) + to2(g) + to2(b);
+}
+
+/* 30S 明细：按日期分组；每组上方插入「当日汇总」行（可显隐） */
 function renderS30Body(biz) {
   const el = $('#s30Body');
   if (!el) return;
+
+  /* 顶部按钮状态同步（首次渲染 / 切换业务线时兜底） */
+  const btnSum = $('#btnS30Sum');
+  if (btnSum) {
+    btnSum.textContent = S.s30ShowSummary ? '隐藏日汇总' : '显示日汇总';
+    btnSum.onclick = () => {
+      S.s30ShowSummary = !S.s30ShowSummary;
+      btnSum.textContent = S.s30ShowSummary ? '隐藏日汇总' : '显示日汇总';
+      renderS30Body(biz);
+    };
+  }
+
   const dates = Array.from(S.s30Dates).sort();
   if (!dates.length) { el.innerHTML = '<p class="muted">请选择日期。</p>'; return; }
 
@@ -1178,32 +1203,36 @@ function renderS30Body(biz) {
     };
   };
 
-  /* ④ 组装：日期汇总行 + 该日期下的时段明细 */
+  /* ④ 组装：日期汇总行（可显隐）+ 该日期下的时段明细 */
+  const showSum = S.s30ShowSummary !== false;
   const bodyParts = [];
   for (const g of groups) {
     const bg = bgMap[g.date] || '#fff';
+    const darkBg = darkenColor(bg, 0.86);
 
-    /* 汇总行：加粗 + 顶部双线分隔 */
-    const sumStyle = ' style="background:' + bg + ';font-weight:700;border-top:2px solid #C9C6BE;border-bottom:1px solid #D5D2CB"';
-    const sumRate = g.den > 0 ? g.num / g.den : null;
-    const sumMiss = g.den - g.num;
-    let sumExtra = '';
-    if (hasFc) {
-      const f = renderFc(g.hasFc ? g.forecast : null, g.den);
-      sumExtra = '<td' + sumStyle + '>' + f.fc + '</td><td' + sumStyle + '>' + f.bias + '</td>';
+    if (showSum) {
+      const sumStyle = ' style="background:' + darkBg +
+        ';font-weight:700;font-size:14px;' +
+        'border-top:2px solid #B0ADA4;border-bottom:1px solid #C9C6BE"';
+      const sumRate = g.den > 0 ? g.num / g.den : null;
+      const sumMiss = g.den - g.num;
+      let sumExtra = '';
+      if (hasFc) {
+        const f = renderFc(g.hasFc ? g.forecast : null, g.den);
+        sumExtra = '<td' + sumStyle + '>' + f.fc + '</td><td' + sumStyle + '>' + f.bias + '</td>';
+      }
+      bodyParts.push(
+        '<tr>' +
+          '<td' + sumStyle + '>📅 ' + esc(g.date) + ' 当日汇总</td>' +
+          '<td' + sumStyle + '>' + rateSpan(sumRate, biz) + '</td>' +
+          '<td' + sumStyle + '>' + Math.round(g.num) + '</td>' +
+          '<td' + sumStyle + '>' + Math.round(g.den) + '</td>' +
+          '<td' + sumStyle + '>' + Math.round(sumMiss) + '</td>' +
+          sumExtra +
+        '</tr>'
+      );
     }
-    bodyParts.push(
-      '<tr>' +
-        '<td' + sumStyle + '>📅 ' + esc(g.date) + ' 当日汇总</td>' +
-        '<td' + sumStyle + '>' + rateSpan(sumRate, biz) + '</td>' +
-        '<td' + sumStyle + '>' + Math.round(g.num) + '</td>' +
-        '<td' + sumStyle + '>' + Math.round(g.den) + '</td>' +
-        '<td' + sumStyle + '>' + Math.round(sumMiss) + '</td>' +
-        sumExtra +
-      '</tr>'
-    );
 
-    /* 明细行 */
     for (const x of g.rows) {
       const r = x.den > 0 ? x.num / x.den : null;
       const m = x.den - x.num;
@@ -1230,7 +1259,6 @@ function renderS30Body(biz) {
   el.innerHTML = '<table><thead>' + head + '</thead><tbody>' + bodyParts.join('') + '</tbody></table>';
 }
 
-/* 二级AHT：以最新 WK 与其前一周对比 */
 function renderAHT2() {
   const el = $('#a2Body');
   if (!el) return;
@@ -1245,7 +1273,6 @@ function renderAHT2() {
   const bizEl = $('#a2Biz');
   const biz = (bizEl && bizEl.value) || '买手合作';
   if (!S.records.length) { el.innerHTML = '<p class="muted">尚未导入数据。</p>'; return; }
-  /* 显示最新 WK */
   const wkNow = S.latestWK;
   const wkPrev = wkNow - 1;
   function bizAHT(wk) {
@@ -1377,7 +1404,6 @@ function slaAchieve(src, metricKey, category) {
   return calcBySrc(src, { monthSet, nameSet })[metricKey];
 }
 
-/* SLA 计分：未达最低档位时按最低档位保底 */
 function calcSlaScore(metricKey, actual, monthCfg) {
   if (!monthCfg) return { threshold: null, points: null, achieveRate: null, finalScore: null, hitTierIndex: -1, actualDisp: null, weight: null, isPct: false, belowLowest: false };
   const m = metricKey ? METRIC_MAP[metricKey] : null;
@@ -1409,7 +1435,6 @@ function calcSlaScore(metricKey, actual, monthCfg) {
     }
   }
 
-  /* 未命中任何档位 → 按最低档位保底 */
   let belowLowest = false;
   if (hitIdx === -1) {
     const lowest = monthCfg.tiers[monthCfg.tiers.length - 1];
@@ -1738,7 +1763,6 @@ function downloadExport() {
 function loadTargets() { try { return JSON.parse(localStorage.getItem('creator_kpi_target') || '{}'); } catch (_) { return {}; } }
 function saveTargets(t) { localStorage.setItem('creator_kpi_target', JSON.stringify(t)); }
 
-/* 读取 SLA 中各指标「100% 得分档位」的阈值作为目标值。 */
 function slaTargets100(biz) {
   const out = {};
   const src = bizToSrc(biz);
@@ -1793,14 +1817,12 @@ function slaTargets100(biz) {
   return out;
 }
 
-/* 手动值优先（用户覆盖 SLA）；SLA 作为默认值补位 */
 function getTargets(biz) {
   const manual = loadTargets()[biz] || {};
   const sla = slaTargets100(biz);
   return Object.assign({}, sla, manual);
 }
 
-/* 30S 专用目标（返回小数） */
 function s30TargetFromSLA(biz) {
   const t = slaTargets100(biz);
   return t.s30Rate != null ? t.s30Rate : null;
@@ -1816,7 +1838,6 @@ function s30TargetPct(biz) {
   return S30_THRESHOLD[biz] != null ? S30_THRESHOLD[biz] : 0.97;
 }
 
-/* ===== 周报 · 目标设置面板 ===== */
 function renderTargetConfig() {
   const grid = $('#targetGrid');
   if (!grid) return;
@@ -1919,7 +1940,6 @@ function renderTargetConfig() {
   });
 }
 
-/* ===== 周报 · 指标行 ===== */
 function metricLineParts(curRaw, prevRaw, monthRaw, m, tgt, monthLabel) {
   const isPct = !!m.pct;
   const unit = isPct ? '%' : '';
@@ -2207,6 +2227,47 @@ function s30AnalysisData(biz, wk) {
   };
 }
 
+/* 超预测 + 不达标时段的 Miss 回补影响值
+   筛选：偏差 > 120% 且 时段接起率 < 阈值 且 Miss > 0
+   日度影响值 = (该日 num + Miss) / 该日 den − 该日实际 rate
+   周度影响值 = (整周 num + Miss) / 整周 den − 整周实际 rate
+   排序：按周度影响值升序（拖累最大的排前） */
+function computeOverForecastImpactDetail(cur) {
+  const th = cur.th;
+  const totNum = cur.totNum, totDen = cur.totDen, totRate = cur.totRate;
+  const dayMap = new Map();
+  for (const d of cur.days) dayMap.set(d.date, d);
+
+  const rows = [];
+  for (const o of cur.fcSlices) {
+    if (!o.hasFc || !o.forecast || o.forecast <= 0) continue;
+    const bias = o.den / o.forecast;
+    if (bias <= 1.2) continue;
+    if (o.den <= 0) continue;
+    const rate = o.num / o.den;
+    if (rate >= th) continue;
+    const miss = o.den - o.num;
+    if (miss <= 0) continue;
+
+    const day = dayMap.get(o.date);
+    if (!day || day.den <= 0) continue;
+
+    const newDayRate = (day.num + miss) / day.den;
+    const dayImpact = newDayRate - day.rate;
+
+    const newWeekRate = (totNum + miss) / totDen;
+    const weekImpact = newWeekRate - totRate;
+
+    rows.push({
+      date: o.date, period: o.period,
+      forecast: o.forecast, den: o.den, num: o.num,
+      miss, bias, rate, dayImpact, weekImpact
+    });
+  }
+  rows.sort((a, b) => a.weekImpact - b.weekImpact);
+  return rows;
+}
+
 function s30AnalysisHTML(biz, wk, prevWk) {
   const cur = s30AnalysisData(biz, wk);
   if (!cur) return '';
@@ -2274,6 +2335,37 @@ function s30AnalysisHTML(biz, wk, prevWk) {
         'Miss 分布未见明显的量级集中特征。';
     }
     P.push('<div class="rpt-sub">' + insight + '</div>');
+  }
+
+  /* 🎯 日度时段超预测影响值（含 Miss 回补） */
+  if (cur.hasFc && cur.fcSlices && cur.fcSlices.length) {
+    const impacts = computeOverForecastImpactDetail(cur);
+    if (impacts.length) {
+      const totalMiss = impacts.reduce((s, x) => s + x.miss, 0);
+      P.push('<div class="rpt-sub" style="margin-top:8px">🎯 <b>日度时段超预测影响值</b>（仅统计超预测 &gt;120% 且时段接起率不达标的切片；将 Miss 回补至 30S 接起量后重算日 / 周接起率，影响值 = 回补后接起率 − 实际接起率）</div>');
+      P.push('<div class="rpt-sub">符合条件时段共 <b>' + impacts.length + '</b> 个，累计 Miss <b>' + totalMiss + '</b> 单。负值表示该时段拉低整体接起率。</div>');
+
+      const rows = impacts.map((x, i) => {
+        const dayColor = x.dayImpact < 0 ? '#D9363E' : '#6EA980';
+        const weekColor = x.weekImpact < 0 ? '#D9363E' : '#6EA980';
+        const dayDisp = (x.dayImpact >= 0 ? '+' : '') + (x.dayImpact * 100).toFixed(2) + 'pp';
+        const weekDisp = (x.weekImpact >= 0 ? '+' : '') + (x.weekImpact * 100).toFixed(2) + 'pp';
+        return '<tr>' +
+          '<td style="text-align:center">' + (i + 1) + '</td>' +
+          '<td>' + esc(x.date.slice(5)) + ' ' + esc(x.period) + '时</td>' +
+          '<td style="text-align:center">' + Math.round(x.forecast) + '</td>' +
+          '<td style="text-align:center">' + Math.round(x.den) + '</td>' +
+          '<td style="text-align:center">' + (x.bias * 100).toFixed(1) + '%</td>' +
+          '<td style="text-align:center">' + x.miss + '</td>' +
+          '<td style="text-align:center;color:#D9363E;font-weight:600">' + (x.rate * 100).toFixed(2) + '%</td>' +
+          '<td style="text-align:center;color:' + dayColor + ';font-weight:600">' + dayDisp + '</td>' +
+          '<td style="text-align:center;color:' + weekColor + ';font-weight:600">' + weekDisp + '</td>' +
+        '</tr>';
+      }).join('');
+      P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
+        '<th>排名</th><th>日期 × 时段</th><th>预测量</th><th>实际量</th><th>超预测率</th><th>Miss</th><th>时段接起率</th><th>日度影响值</th><th>周度影响值</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
   }
 
   if (cur.days.length) {
@@ -2471,6 +2563,29 @@ function s30AnalysisText(biz, wk, prevWk) {
     L.push('');
   }
 
+  if (cur.hasFc && cur.fcSlices && cur.fcSlices.length) {
+    const impacts = computeOverForecastImpactDetail(cur);
+    if (impacts.length) {
+      const totalMiss = impacts.reduce((s, x) => s + x.miss, 0);
+      L.push('**🎯 日度时段超预测影响值**（仅统计超预测 >120% 且时段接起率不达标的切片；将 Miss 回补至 30S 接起量后重算日 / 周接起率，影响值 = 回补后接起率 − 实际接起率）');
+      L.push('');
+      L.push('- 符合条件时段共 **' + impacts.length + '** 个，累计 Miss **' + totalMiss + '** 单');
+      L.push('- 负值表示该时段拉低整体接起率');
+      L.push('');
+      L.push('| 排名 | 日期 × 时段 | 预测量 | 实际量 | 超预测率 | Miss | 时段接起率 | 日度影响值 | 周度影响值 |');
+      L.push('| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
+      for (let i = 0; i < impacts.length; i++) {
+        const x = impacts[i];
+        const dayDisp = (x.dayImpact >= 0 ? '+' : '') + (x.dayImpact * 100).toFixed(2) + 'pp';
+        const weekDisp = (x.weekImpact >= 0 ? '+' : '') + (x.weekImpact * 100).toFixed(2) + 'pp';
+        L.push('| ' + (i + 1) + ' | ' + x.date.slice(5) + ' ' + x.period + '时 | ' + Math.round(x.forecast) +
+          ' | ' + Math.round(x.den) + ' | ' + (x.bias * 100).toFixed(1) + '% | ' + x.miss +
+          ' | ' + (x.rate * 100).toFixed(2) + '% | ' + dayDisp + ' | ' + weekDisp + ' |');
+      }
+      L.push('');
+    }
+  }
+
   if (cur.days.length) {
     L.push('**📅 日期维度**'); L.push('');
     L.push('| 日期 | 接起率 | Miss 量 | 预测量 | 预测偏差 | 是否达标 |');
@@ -2569,7 +2684,6 @@ function s30AnalysisText(biz, wk, prevWk) {
   return L;
 }
 
-/* ===== 周报 · 构建 ===== */
 function buildReport(biz, wk) {
   const src = bizToSrc(biz);
   const prevWk = wk - 1;
@@ -3249,7 +3363,6 @@ function downloadReportMd() {
   toast('⬇ 已下载 Markdown 文件');
 }
 
-/* ---------------- 全局刷新 ---------------- */
 function refreshAll() {
   if (!S.records.length && !S.wtRecords.length && !S.inspections.length) return;
   renderOverview(); renderPerson(); renderTeam(); renderS30(); renderAHT2(); renderSLA(); renderAttendance();
