@@ -165,7 +165,7 @@
   <section id="view-sla" class="view">
     <div class="card">
       <div class="card-head">
-        <h2>达成 SLA <span class="help" data-tip="按业务线读取对应员工SLA sheet 中的「指标 / 分类 / 月度目标」：分类为『整体』时对比该业务线整体月度达成，其他分类（首月 / 次月 / 老人）匹配员工月度分类。">?</span></h2>
+        <h2>达成 SLA <span class="help" data-tip="按业务线读取对应员工SLA sheet 中的「指标 / 分类 / 月度目标」。">?</span></h2>
         <div class="head-controls">
           <label>业务线 <select id="slaBiz"></select></label>
         </div>
@@ -240,9 +240,24 @@
         </label>
         <label class="ai-field">模型
           <select id="aiModel">
-            <option value="glm-4-flash">GLM-4-Flash（免费 · 推荐）</option>
-            <option value="glm-4-air">GLM-4-Air（更快）</option>
-            <option value="glm-4-plus">GLM-4-Plus（更强）</option>
+            <optgroup label="GLM-5 系列（最新）">
+              <option value="glm-5.3-flash" selected>GLM-5.3-Flash（免费额度 · 推荐）</option>
+              <option value="glm-5.3-flashx">GLM-5.3-FlashX（极速）</option>
+              <option value="glm-5.3">GLM-5.3（旗舰 · 深度分析）</option>
+              <option value="glm-5.2">GLM-5.2（旗舰 · 开源 SOTA）</option>
+              <option value="glm-5.1">GLM-5.1（长程任务）</option>
+              <option value="glm-5-turbo">GLM-5-Turbo（Agent 专用）</option>
+              <option value="glm-5">GLM-5（通用）</option>
+            </optgroup>
+            <optgroup label="GLM-4 系列">
+              <option value="glm-4.7-flash">GLM-4.7-Flash（免费）</option>
+              <option value="glm-4.7">GLM-4.7（代码增强）</option>
+              <option value="glm-4-plus">GLM-4-Plus（高智能）</option>
+              <option value="glm-4-air">GLM-4-Air（高性价比）</option>
+              <option value="glm-4-flash">GLM-4-Flash（免费）</option>
+              <option value="glm-4-long">GLM-4-Long（超长上下文）</option>
+              <option value="glm-4-airx">GLM-4-AirX（极速推理）</option>
+            </optgroup>
           </select>
         </label>
         <label class="ai-field">分析重点
@@ -254,9 +269,15 @@
             <option value="对比">聚焦环比变化</option>
           </select>
         </label>
+        <label class="ai-field">分析模式
+          <select id="aiMode">
+            <option value="single">单轮（快）</option>
+            <option value="deep" selected>两阶段深挖（慢但细）</option>
+          </select>
+        </label>
       </div>
       <div id="aiOut" class="ai-out">
-        <div class="muted">填写 API Key 后，点击「生成分析」，AI 将解读当前周报。</div>
+        <div class="muted">填写 API Key 后，点击「生成分析」，AI 将结合周度 + 月度数据解读当前周报。</div>
       </div>
     </div>
   </section>
