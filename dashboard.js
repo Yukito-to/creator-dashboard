@@ -1107,7 +1107,7 @@ function renderS30() {
   renderS30Body(biz);
 }
 
-/* 颜色加深工具：用于「当日汇总」行背景 */
+/* 颜色加深工具 */
 function darkenColor(hex, factor) {
   if (!hex || typeof hex !== 'string' || hex[0] !== '#') return hex;
   let r, g, b;
@@ -1125,7 +1125,7 @@ function darkenColor(hex, factor) {
   return '#' + to2(r) + to2(g) + to2(b);
 }
 
-/* 30S 明细：按日期分组；每组上方插入「当日汇总」行（可显隐） */
+/* 30S 明细：按日期分组 + 当日汇总（可显隐） */
 function renderS30Body(biz) {
   const el = $('#s30Body');
   if (!el) return;
@@ -1381,16 +1381,14 @@ function matchMetricKey(s) {
   return null;
 }
 
-/* ✅ 修改：SLA 员工维度计算（30S 接起率也按员工分类计算） */
+/* SLA 员工维度计算（30S 接起率也按员工分类计算） */
 function slaAchieve(src, metricKey, category) {
   const monthSet = new Set([S.month]);
   const srcEmps = srcEmployeeSet(src);
 
-  /* 判断「整体」类分类（不按员工细分） */
   const c = String(category == null ? '' : category).trim();
   const isOverall = !c || c === '整体' || c === '全部' || c === '合计' || c === '总计' || c === '平均' || c === '总体';
 
-  /* 非整体分类：先按员工维度圈定人员 */
   let nameSet = null;
   if (!isOverall) {
     const names = S.roster
@@ -1400,8 +1398,6 @@ function slaAchieve(src, metricKey, category) {
     nameSet = new Set(names);
   }
 
-  /* 统一走 calcBySrc：所有指标（含 30S 接起率）都按员工维度计算
-     calcBySrc 内部通过 s30AggFor 按 nameSet 过滤 30S 分子/分母 */
   const opts = { monthSet };
   if (nameSet) opts.nameSet = nameSet;
   return calcBySrc(src, opts)[metricKey];
@@ -2120,7 +2116,7 @@ function reportConclusion(d) {
   return out;
 }
 
-/* ==================== 30S 接起率 多维度归因分析（含预测量维度） ==================== */
+/* ==================== 30S 接起率 多维度归因分析 ==================== */
 function s30AnalysisData(biz, wk) {
   const records = S.records.filter(r => r.biz === biz && r.wk === wk);
   if (!records.length) return null;
@@ -2156,10 +2152,7 @@ function s30AnalysisData(biz, wk) {
   const th = s30Threshold(biz);
   const hit = totRate >= th;
   const targetNum = th * totDen;
-  /* 30S 接起率缺口（仅未达标时计算，向上取整）：
-     设缺口为 X，使其满足 (接起分子 + X) / (接起分母 + X) = 目标值
-     解得：X = (目标值 × 分母 − 分子) / (1 − 目标值)
-     gapNum = ceil(X)，减 1e-9 抵消 JS 浮点误差 */
+  /* 30S 接起率缺口（仅未达标时计算，向上取整） */
   const gapRaw = (th * totDen - totNum) / (1 - th);
   const gapNum = (!hit && th > 0 && th < 1 && isFinite(gapRaw))
     ? Math.max(0, Math.ceil(gapRaw - 1e-9))
@@ -2237,11 +2230,7 @@ function s30AnalysisData(biz, wk) {
   };
 }
 
-/* 超预测 + 不达标时段的 Miss 回补影响值
-   筛选：偏差 > 120% 且 时段接起率 < 阈值 且 Miss > 0
-   日度影响值 = (该日 num + Miss) / 该日 den − 该日实际 rate
-   周度影响值 = (整周 num + Miss) / 整周 den − 整周实际 rate
-   排序：按周度影响值升序（拖累最大的排前） */
+/* 超预测 + 不达标时段的 Miss 回补影响值 */
 function computeOverForecastImpactDetail(cur) {
   const th = cur.th;
   const totNum = cur.totNum, totDen = cur.totDen, totRate = cur.totRate;
@@ -2350,7 +2339,7 @@ function s30AnalysisHTML(biz, wk, prevWk) {
     P.push('<div class="rpt-sub">' + insight + '</div>');
   }
 
-  /* 🎯 日度时段超预测影响值（含 Miss 回补） */
+  /* 🎯 日度时段超预测影响值 */
   if (cur.hasFc && cur.fcSlices && cur.fcSlices.length) {
     const impacts = computeOverForecastImpactDetail(cur);
     if (impacts.length) {
@@ -3006,7 +2995,7 @@ function reportHTML(d) {
     P.push('<div class="rpt-line">本周工时利用率：' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '（' + (up != null ? (up*100).toFixed(2) + '%' : '—') + '→' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '，' + arrow + (du != null ? (Math.abs(du)*100).toFixed(2) + '%' : '—') + '）</div>');
   }
 
-  /* ⑥二级AHT：新逻辑（负贡献且上升 / 正贡献且下降） */
+  /* ⑥二级AHT：负贡献且上升 / 正贡献且下降 */
   {
     const aNow = cur.aht, aPrev = prev.aht;
     const ahtRose = (aNow != null && aPrev != null && aNow > aPrev);
@@ -3279,7 +3268,7 @@ function reportToText(d) {
     L.push('本周工时利用率：' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '（' + (up != null ? (up*100).toFixed(2) + '%' : '—') + '→' + (u != null ? (u*100).toFixed(2) + '%' : '—') + '，' + arrow + (du != null ? (Math.abs(du)*100).toFixed(2) + '%' : '—') + '）');
   }
 
-  /* ⑥二级AHT：新逻辑 */
+  /* ⑥二级AHT：负贡献且上升 / 正贡献且下降 */
   {
     const aNow = cur.aht, aPrev = prev.aht;
     const ahtRose = (aNow != null && aPrev != null && aNow > aPrev);
@@ -3426,6 +3415,273 @@ function downloadReportMd() {
   toast('⬇ 已下载 Markdown 文件');
 }
 
+/* ==================== AI 周报分析（智谱 GLM） ==================== */
+const AI_KEY_STORE = 'creator_ai_zhipu_key';
+const AI_MODEL_STORE = 'creator_ai_zhipu_model';
+let _aiAbort = null;
+let _aiStreaming = false;
+
+function loadAiConfig() {
+  return {
+    key: localStorage.getItem(AI_KEY_STORE) || '',
+    model: localStorage.getItem(AI_MODEL_STORE) || 'glm-4-flash',
+  };
+}
+function saveAiConfig(key, model) {
+  if (key != null) localStorage.setItem(AI_KEY_STORE, key);
+  if (model != null) localStorage.setItem(AI_MODEL_STORE, model);
+}
+
+/* 极简 Markdown 渲染（先整体转义，再放行白名单标签，防 XSS） */
+function renderAiMarkdown(md) {
+  if (!md) return '';
+  let s = String(md);
+  s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  s = s.replace(/```([\s\S]*?)```/g, (m, code) => '<pre><code>' + code.replace(/^\n+|\n+$/g, '') + '</code></pre>');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^###\s+(.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^#\s+(.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>');
+  s = s.replace(/^[\-\*\+]\s+(.+)$/gm, '\u0001LI\u0001$1');
+  s = s.replace(/(?:\u0001LI\u0001[^\n]*(?:\n|$))+/g, (m) => {
+    const items = m.trim().split('\n').map(x => '<li>' + x.replace(/\u0001LI\u0001/, '') + '</li>').join('');
+    return '<ul>' + items + '</ul>';
+  });
+  s = s.replace(/^\d+\.\s+(.+)$/gm, '\u0002LI\u0002$1');
+  s = s.replace(/(?:\u0002LI\u0002[^\n]*(?:\n|$))+/g, (m) => {
+    const items = m.trim().split('\n').map(x => '<li>' + x.replace(/\u0002LI\u0002/, '') + '</li>').join('');
+    return '<ol>' + items + '</ol>';
+  });
+  s = s.replace(/(^\|.+\|$\n?)+/gm, (m) => {
+    const lines = m.trim().split('\n');
+    if (lines.length < 2) return m;
+    const header = lines[0].split('|').slice(1, -1).map(x => x.trim());
+    if (!/^\|[\s\-:|]+\|$/.test(lines[1].trim())) return m;
+    const body = lines.slice(2).map(l => l.split('|').slice(1, -1).map(x => x.trim()));
+    let html = '<table class="rp-table"><thead><tr>' + header.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>';
+    html += body.map(r => '<tr>' + r.map(c => '<td>' + c + '</td>').join('') + '</tr>').join('');
+    html += '</tbody></table>';
+    return html;
+  });
+  s = s.split(/\n{2,}/).map(p => {
+    const t = p.trim();
+    if (!t) return '';
+    if (/^<(h\d|ul|ol|pre|table|blockquote)/.test(t)) return t;
+    return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+  return s;
+}
+
+/* 智谱 API 调用（SSE 流式） */
+async function callZhipuAI(apiKey, model, messages, onChunk, signal) {
+  const url = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + apiKey,
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: messages,
+      stream: true,
+      temperature: 0.5,
+      max_tokens: 4096,
+    }),
+    signal: signal,
+  });
+  if (!resp.ok) {
+    let detail = '';
+    try { const j = await resp.json(); detail = (j && j.error && j.error.message) || JSON.stringify(j); }
+    catch (_) { detail = await resp.text(); }
+    throw new Error('HTTP ' + resp.status + ' · ' + detail);
+  }
+  if (!resp.body || !resp.body.getReader) {
+    const j = await resp.json();
+    const c = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+    if (c) onChunk(c);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || !line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        const obj = JSON.parse(data);
+        const delta = (obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content)
+                   || (obj.choices && obj.choices[0] && obj.choices[0].message && obj.choices[0].message.content)
+                   || '';
+        if (delta) onChunk(delta);
+      } catch (_) {}
+    }
+  }
+}
+
+/* Prompt 组装 */
+function buildAiPrompt(biz, wk, focus, reportMd) {
+  const focusMap = {
+    '综合': '请对整份周报做全面解读：核心表现、最大变化、风险点、改进建议。',
+    '30S':  '重点围绕 30S 接起率：达标情况、Miss 分布、超预测影响、改进方向。',
+    'AHT':  '重点围绕 AHT 与人效：AHT 变化、二级打点影响值、CPD / 并发 / 利用率。',
+    '质量': '重点围绕质量指标：解决率、满意度、质检合格率，以及分类（首月/次月/老人）差异。',
+    '对比': '重点做环比分析：本周 vs 上周的主要变化、异常指标、拐点信号。',
+  };
+  const focusText = focusMap[focus] || focusMap['综合'];
+  const system = [
+    '你是一位资深的客服运营数据分析师，擅长从数据中提炼结论、发现异常、给出可落地的建议。',
+    '输出要求：',
+    '1. 结论先行，第一段直接给出核心判断（不超过 3 句）；',
+    '2. 用数据说话，引用具体数字；',
+    '3. 分点列出，每条独立成段，可执行；',
+    '4. Markdown 格式，二级标题用 ##，三级用 ###；',
+    '5. 不写空话套话，不重复数据原文，聚焦"为什么"和"怎么办"；',
+    '6. 数据不足以支撑判断时，直接说明"数据不足"。',
+  ].join('\n');
+
+  const user = [
+    '以下是 ' + biz + ' 业务线 WK' + wk + ' 的周报数据（Markdown）：',
+    '',
+    focusText,
+    '',
+    '按以下结构输出：',
+    '## 一、核心结论',
+    '## 二、异常与风险点',
+    '## 三、分项分析',
+    '## 四、改进建议（3~5 条，每条含"做什么 + 期望效果"）',
+    '',
+    '---',
+    '',
+    '```markdown',
+    reportMd,
+    '```',
+  ].join('\n');
+
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+}
+
+/* AI 主流程 */
+async function runAiAnalysis() {
+  const keyEl = $('#aiKey');
+  const modelEl = $('#aiModel');
+  const focusEl = $('#aiFocus');
+  const outEl = $('#aiOut');
+  const btnRun = $('#btnAiRun');
+  const btnStop = $('#btnAiStop');
+  if (!outEl) return;
+
+  const apiKey = ((keyEl && keyEl.value) || '').trim();
+  const model = (modelEl && modelEl.value) || 'glm-4-flash';
+  const focus = (focusEl && focusEl.value) || '综合';
+
+  if (!apiKey) {
+    outEl.innerHTML = '<div class="ai-err">❌ 请先填写智谱 API Key（到 https://open.bigmodel.cn 免费注册，新用户有免费额度）</div>';
+    return;
+  }
+  saveAiConfig(apiKey, model);
+
+  const bizEl = $('#rpBiz'); const wkEl = $('#rpWK');
+  const biz = (bizEl && bizEl.value) || '买手合作';
+  const wk = parseInt((wkEl && wkEl.value) || '', 10) || S.latestWK;
+
+  let reportMd = '';
+  try { reportMd = reportToText(buildReport(biz, wk)); }
+  catch (e) {
+    outEl.innerHTML = '<div class="ai-err">❌ 生成周报文本失败：' + esc(e.message) + '</div>';
+    return;
+  }
+  if (!reportMd || reportMd.length < 80) {
+    outEl.innerHTML = '<div class="ai-err">❌ 周报数据为空或过短，无法分析。请先在周报页选择有数据的周次。</div>';
+    return;
+  }
+
+  const messages = buildAiPrompt(biz, wk, focus, reportMd);
+
+  _aiStreaming = true;
+  if (btnRun) { btnRun.disabled = true; btnRun.textContent = '分析中…'; }
+  if (btnStop) btnStop.classList.remove('hidden');
+  outEl.innerHTML = '<div class="ai-cursor"></div>';
+
+  let buffer = '';
+  const render = () => {
+    outEl.innerHTML = renderAiMarkdown(buffer) + (_aiStreaming ? '<span class="ai-cursor"></span>' : '');
+    outEl.scrollTop = outEl.scrollHeight;
+  };
+
+  const controller = new AbortController();
+  _aiAbort = controller;
+
+  try {
+    await callZhipuAI(apiKey, model, messages, (chunk) => { buffer += chunk; render(); }, controller.signal);
+    _aiStreaming = false;
+    if (!buffer.trim()) {
+      outEl.innerHTML = '<div class="ai-err">⚠ AI 返回内容为空，请重试或更换模型</div>';
+    } else {
+      render();
+    }
+  } catch (err) {
+    _aiStreaming = false;
+    if (err && err.name === 'AbortError') {
+      render();
+      toast('已停止生成');
+    } else {
+      const msg = String((err && err.message) || err);
+      let tip = '';
+      if (/Failed to fetch|NetworkError|Network request failed|Load failed/i.test(msg)) {
+        tip = '<br><br>可能原因：<br>① <b>浏览器 CORS 拦截</b>——请用本地小服务器打开（如 VS Code Live Server，或 <code>python -m http.server</code>）而不是双击 HTML；<br>② 网络不通——确认能访问 open.bigmodel.cn；<br>③ 如仍不通，需要后端代理，请联系我改成 Node 版。';
+      } else if (/401|403/.test(msg)) {
+        tip = '<br><br>API Key 无效、过期或权限不足。请到智谱后台确认 Key 状态。';
+      } else if (/429/.test(msg)) {
+        tip = '<br><br>请求过于频繁或超出配额，请稍后重试。';
+      } else if (/404/.test(msg)) {
+        tip = '<br><br>模型名不存在或账号无权限使用该模型，请换成 <code>glm-4-flash</code>。';
+      }
+      outEl.innerHTML = '<div class="ai-err">❌ 调用失败：' + esc(msg) + tip + '</div>';
+    }
+  } finally {
+    if (btnRun) { btnRun.disabled = false; btnRun.textContent = '生成分析'; }
+    if (btnStop) btnStop.classList.add('hidden');
+    _aiAbort = null;
+  }
+}
+
+function stopAiAnalysis() {
+  if (_aiAbort) { try { _aiAbort.abort(); } catch (_) {} }
+}
+
+function initAiPanel() {
+  const keyEl = $('#aiKey');
+  const modelEl = $('#aiModel');
+  const cfg = loadAiConfig();
+  if (keyEl && cfg.key) keyEl.value = cfg.key;
+  if (modelEl && cfg.model) modelEl.value = cfg.model;
+
+  const btnRun = $('#btnAiRun');
+  const btnStop = $('#btnAiStop');
+  if (btnRun) btnRun.addEventListener('click', runAiAnalysis);
+  if (btnStop) btnStop.addEventListener('click', stopAiAnalysis);
+  if (keyEl) keyEl.addEventListener('change', () => saveAiConfig(keyEl.value.trim(), null));
+  if (modelEl) modelEl.addEventListener('change', () => saveAiConfig(null, modelEl.value));
+}
+
+/* ---------------- 全局刷新 ---------------- */
 function refreshAll() {
   if (!S.records.length && !S.wtRecords.length && !S.inspections.length) return;
   renderOverview(); renderPerson(); renderTeam(); renderS30(); renderAHT2(); renderSLA(); renderAttendance();
@@ -3504,6 +3760,7 @@ function bindEvents() {
     const rb = $('#rpBody'); if (rb) rb.innerHTML = '';
     const rc = $('#btnRpCopy'); if (rc) rc.disabled = true;
     const rm = $('#btnRpMd'); if (rm) rm.disabled = true;
+    const ao = $('#aiOut'); if (ao) ao.innerHTML = '<div class="muted">填写 API Key 后，点击「生成分析」，AI 将解读当前周报。</div>';
   });
   on('#rosterSearch', 'input', renderRoster);
   on('#ovBiz', 'change', renderOverview);
@@ -3538,6 +3795,7 @@ function bindEvents() {
 function init() {
   ['peMetric', 'tmMetric', 'exMetric', 'exGroup', 'exBatch', 'exCategory'].forEach(ensureChipContainer);
   bindEvents();
+  initAiPanel();
   renderTargetConfig();
   switchView('import');
 }

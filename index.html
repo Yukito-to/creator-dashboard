@@ -225,6 +225,40 @@
       </div>
       <div id="rpBody"></div>
     </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>🤖 AI 周报分析 <span class="help" data-tip="接入智谱 GLM。API Key 仅存本地浏览器，不会上传。分析复用当前周报的业务线与周次。">?</span></h2>
+        <div class="head-controls">
+          <button id="btnAiRun" class="btn primary">生成分析</button>
+          <button id="btnAiStop" class="btn ghost2 hidden">停止</button>
+        </div>
+      </div>
+      <div class="ai-config">
+        <label class="ai-field">API Key
+          <input type="password" id="aiKey" placeholder="粘贴智谱 API Key（open.bigmodel.cn 免费领取）" autocomplete="off">
+        </label>
+        <label class="ai-field">模型
+          <select id="aiModel">
+            <option value="glm-4-flash">GLM-4-Flash（免费 · 推荐）</option>
+            <option value="glm-4-air">GLM-4-Air（更快）</option>
+            <option value="glm-4-plus">GLM-4-Plus（更强）</option>
+          </select>
+        </label>
+        <label class="ai-field">分析重点
+          <select id="aiFocus">
+            <option value="综合">综合周报解读</option>
+            <option value="30S">聚焦 30S 接起率</option>
+            <option value="AHT">聚焦 AHT 与人效</option>
+            <option value="质量">聚焦质量指标</option>
+            <option value="对比">聚焦环比变化</option>
+          </select>
+        </label>
+      </div>
+      <div id="aiOut" class="ai-out">
+        <div class="muted">填写 API Key 后，点击「生成分析」，AI 将解读当前周报。</div>
+      </div>
+    </div>
   </section>
 </main>
 

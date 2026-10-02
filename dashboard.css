@@ -87,7 +87,6 @@ body {
 
 .switch { display: none; }
 
-/* 顶栏按钮 */
 .btn {
   border: none; border-radius: var(--radius-xs);
   padding: 9px 14px; cursor: pointer;
@@ -104,7 +103,7 @@ body {
 .btn.sm { padding: 7px 12px; font-size: 12.5px; background: var(--tap); color: var(--text-2); border-radius: var(--radius-xs); }
 .btn.sm:disabled { opacity: .45; }
 
-/* ==================== 标签栏（横向滑动） ==================== */
+/* ==================== 标签栏 ==================== */
 .tabs {
   display: flex; gap: 6px;
   padding: 8px 12px;
@@ -264,7 +263,7 @@ main { padding: 12px 12px calc(40px + env(safe-area-inset-bottom)); }
 .sum-item .k { font-size: 11px; color: var(--text-3); line-height: 1.3; }
 .sum-item .v { font-size: 15px; font-weight: 600; margin-top: 2px; color: var(--text); }
 
-/* ==================== 表格（横向滑动 + 首列吸附） ==================== */
+/* ==================== 表格 ==================== */
 .table-scroll {
   overflow-x: auto; overflow-y: auto;
   max-height: 70vh;
@@ -291,7 +290,6 @@ thead th {
   line-height: 1.3;
 }
 thead th:first-child {
-  /* 关键修复：横向滚动时吸附左侧；position: sticky / top: 0 已从 thead th 继承 */
   left: 0;
   z-index: 7;
   text-align: left;
@@ -327,7 +325,6 @@ tbody td:first-child {
 tbody tr:active td { background: #FAFAF7; }
 tbody tr:active td:first-child { background: #FAFAF7; }
 
-/* 行内复合标签：姓名小字 + 指标大字（员工面板专用） */
 .row-flex { display: flex; align-items: flex-start; gap: 2px; }
 .row-label-stack { min-width: 0; flex: 1 1 auto; }
 .row-name {
@@ -353,7 +350,6 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 }
 .row-flex .row-toggle { margin-right: 0; }
 
-/* 二级AHT 单元格：二级打点大字 + 一级打点小字 */
 .aht2-l2 {
   font-size: 13px;
   font-weight: 600;
@@ -383,7 +379,6 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   vertical-align: middle;
 }
 
-/* 滚动提示：右侧渐隐 */
 .table-scroll::after {
   content: '';
   position: sticky; right: 0; top: 0;
@@ -395,7 +390,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 }
 .table-scroll:hover::after { opacity: 1; }
 
-/* ==================== 周报表格专用横向滚动容器 ==================== */
+/* ==================== 周报表格横向滚动容器 ==================== */
 .table-scroll-x {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -452,7 +447,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 }
 .resign-input:focus { border-color: var(--primary); }
 
-/* ==================== 芯片（多选标签） ==================== */
+/* ==================== 芯片 ==================== */
 .chips {
   display: flex; flex-wrap: wrap; gap: 6px;
   margin: 10px 0;
@@ -488,7 +483,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   width: 44px; flex: none; padding-top: 8px;
 }
 
-/* ==================== 出勤日历卡片 ==================== */
+/* ==================== 出勤日历 ==================== */
 .att-day-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
@@ -613,7 +608,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 
 .hidden { display: none !important; }
 
-/* ==================== 滚动条（桌面可见） ==================== */
+/* ==================== 滚动条 ==================== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #D5D2CB; border-radius: 3px; }
@@ -666,15 +661,12 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   width: 12px; flex: none;
 }
 
-/* ===== 目标值来源标记：SLA 默认 / 手动覆盖 ===== */
 .target-row input[data-src="sla"] {
   background: #EAF1FB;
   border-color: #B8CBEA;
   color: #4A6FA5;
 }
-.target-row input[data-src="sla"]:hover {
-  background: #E1EBF9;
-}
+.target-row input[data-src="sla"]:hover { background: #E1EBF9; }
 .target-row input[data-src="sla"]:focus {
   background: #FFF7E6;
   border-color: #E8B339;
@@ -692,14 +684,10 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   box-shadow: 0 0 0 3px rgba(217,119,6,.2);
 }
 .target-row .sla-tag {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 5px;
-  color: #fff;
-  flex: none;
-  line-height: 1.5;
-  letter-spacing: .2px;
+  font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 5px;
+  color: #fff; flex: none;
+  line-height: 1.5; letter-spacing: .2px;
 }
 .target-row .sla-tag.sla    { background: #7B8FBF; }
 .target-row .sla-tag.manual { background: #E8A33E; }
@@ -776,7 +764,6 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   box-shadow: 0 0 0 2px rgba(152,168,206,.12);
 }
 
-/* 周报卡片 */
 .rp-kpis {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -996,7 +983,6 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   }
 }
 
-/* 小屏精细调整 */
 @media (max-width: 380px) {
   .tabs button { padding: 7px 10px; font-size: 12px; }
   .rp-kpis { grid-template-columns: 1fr; }
@@ -1007,9 +993,90 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   thead th:first-child, tbody td:first-child { min-width: 118px; max-width: 150px; }
 }
 
-/* ==================== 打印 ==================== */
 @media print {
   .topbar, .tabs, .card-head, .help, .target-panel { display: none !important; }
   .rp-wrap { box-shadow: none; border: none; padding: 0; }
   body { background: #fff; }
+}
+
+/* ==================== AI 周报分析 ==================== */
+.ai-config {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.ai-field {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-2);
+}
+.ai-field > input,
+.ai-field > select {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  padding: 8px 10px;
+  font-size: 13px; font-family: inherit;
+  background: #fff; color: var(--text);
+  outline: none;
+  transition: .15s;
+  -webkit-appearance: none; appearance: none;
+}
+.ai-field > select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' stroke='%2377778A' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 26px;
+}
+.ai-field > input:focus,
+.ai-field > select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(152,168,206,.12);
+}
+.ai-out {
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  min-height: 120px;
+  background: #FCFBF9;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.ai-out h2 { font-size: 15px; margin: 14px 0 8px; color: var(--primary-d); }
+.ai-out h3 { font-size: 14px; margin: 12px 0 6px; color: var(--primary-d); }
+.ai-out h4 { font-size: 13px; margin: 10px 0 4px; color: var(--text); }
+.ai-out p { margin: 0 0 8px; }
+.ai-out ul, .ai-out ol { margin: 4px 0 10px; padding-left: 22px; }
+.ai-out li { margin-bottom: 3px; }
+.ai-out b, .ai-out strong { color: var(--text); }
+.ai-out pre {
+  background: #F4F3EF; padding: 10px 12px; border-radius: 8px;
+  overflow-x: auto; font-size: 12px;
+  border: 1px solid var(--border);
+}
+.ai-out code {
+  background: var(--tap); padding: 1px 5px; border-radius: 4px;
+  font-size: 12px; font-family: ui-monospace, Menlo, monospace;
+}
+.ai-out .ai-cursor {
+  display: inline-block; width: 6px; height: 14px;
+  background: var(--primary); vertical-align: middle;
+  animation: aiBlink .8s steps(2) infinite;
+  margin-left: 2px;
+}
+@keyframes aiBlink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+.ai-out .ai-err {
+  color: var(--warn); font-weight: 600;
+  padding: 10px 12px; background: var(--warn-bg);
+  border-radius: 8px; border-left: 3px solid var(--warn);
+  line-height: 1.7;
+}
+@media (min-width: 769px) {
+  .ai-config { flex-direction: row; flex-wrap: wrap; }
+  .ai-field { flex: 1 1 220px; }
 }
