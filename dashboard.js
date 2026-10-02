@@ -3490,8 +3490,8 @@ async function callZhipuAI(apiKey, model, messages, onChunk, signal) {
       model: model,
       messages: messages,
       stream: true,
-      temperature: 0.5,
-      max_tokens: 4096,
+      temperature: 0.2,
+      max_tokens: 8192,
     }),
     signal: signal,
   });
@@ -3532,44 +3532,180 @@ async function callZhipuAI(apiKey, model, messages, onChunk, signal) {
   }
 }
 
-/* Prompt 组装 */
-function buildAiPrompt(biz, wk, focus, reportMd) {
+/* ============ 组装 AI 分析用的明细上下文（远比周报文本详细） ============ */
+function buildAiContextData(biz, wk) {
+  const src = bizToSrc(biz);
+  const prevWk = wk - 1;
+  const out = { biz, wk, prevWk, emps: [], groups: [], aht2: [], byCat: {} };
+
+  /* ① 30S 日度/时段/员工明细 */
+  const a = s30AnalysisData(biz, wk);
+  if (a) {
+    out.s30 = {
+      totNum: a.totNum, totDen: a.totDen, totRate: a.totRate,
+      th: a.th, hit: a.hit, gapNum: a.gapNum,
+      totFc: a.totFc, totBias: a.totBias,
+      days: a.days.map(d => ({
+        date: d.date, rate: d.rate, miss: d.miss,
+        den: d.den, forecast: d.forecast, bias: d.bias, hit: d.hit,
+      })),
+      periods: a.periods.map(p => ({
+        period: p.period, rate: p.rate, miss: p.miss,
+        den: p.den, forecast: p.forecast, bias: p.bias,
+      })),
+      emps: a.emps.slice(0, 15).map(e => ({
+        name: e.name, rate: e.rate, miss: e.miss, den: e.den,
+      })),
+      fcBuckets: a.fcBuckets,
+      impacts: (function () {
+        try {
+          const list = computeOverForecastImpactDetail(a);
+          return list.slice(0, 10).map(x => ({
+            date: x.date, period: x.period,
+            forecast: x.forecast, den: x.den, bias: x.bias,
+            miss: x.miss, rate: x.rate,
+            dayImpact: x.dayImpact, weekImpact: x.weekImpact,
+          }));
+        } catch (_) { return []; }
+      })(),
+    };
+  }
+
+  /* ② 员工明细 */
+  const srcEmps = srcEmployeeSet(src);
+  const allEmps = S.roster.filter(e => employeeVisible(e) && srcEmps.has(e.name));
+  for (const e of allEmps) {
+    const nameSet = new Set([e.name]);
+    const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
+    const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
+    if (c.caseVolume === 0 && p.caseVolume === 0) continue;
+    out.emps.push({
+      name: e.name, group: e.group || '—', category: categoryOf(e, S.month) || '—',
+      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
+      concurrency: c.concurrency, solveRate: c.solveRate,
+      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
+      prevCaseVolume: p.caseVolume, prevCpd: p.cpd, prevAht: p.aht,
+      prevSolveRate: p.solveRate, prevSatisfaction: p.satisfaction,
+    });
+  }
+
+  /* ③ 分类明细（首月/次月/老人） */
+  for (const cat of ['首月','次月','老人']) {
+    const names = allEmps.filter(e => (categoryOf(e, S.month) || '').includes(cat)).map(e => e.name);
+    if (!names.length) continue;
+    const nameSet = new Set(names);
+    const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
+    const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
+    out.byCat[cat] = {
+      count: names.length,
+      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
+      concurrency: c.concurrency, solveRate: c.solveRate,
+      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
+      prevCpd: p.cpd, prevAht: p.aht,
+      prevSolveRate: p.solveRate, prevSatisfaction: p.satisfaction,
+    };
+  }
+
+  /* ④ 组别明细 */
+  const groupMap = {};
+  for (const e of allEmps) { const g = e.group || '—'; (groupMap[g] = groupMap[g] || []).push(e.name); }
+  out.groups = Object.keys(groupMap).sort().map(g => {
+    const nameSet = new Set(groupMap[g]);
+    const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
+    const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
+    return {
+      name: g, count: nameSet.size,
+      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
+      concurrency: c.concurrency, solveRate: c.solveRate,
+      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
+      prevCpd: p.cpd, prevAht: p.aht,
+    };
+  }).filter(g => g.caseVolume > 0);
+
+  /* ⑤ 二级打点 AHT 明细 */
+  try {
+    const aht2 = aht2ByWeek(biz, wk);
+    out.aht2 = aht2.list
+      .filter(o => o.volNow > 0 || o.volPrev > 0)
+      .sort((x, y) => Math.abs(y.impact || 0) - Math.abs(x.impact || 0))
+      .slice(0, 15)
+      .map(o => ({
+        l1: o.l1, l2: o.l2,
+        ahtNow: o.ahtNow, ahtPrev: o.ahtPrev,
+        volNow: o.volNow, volPrev: o.volPrev,
+        impact: o.impact,
+      }));
+  } catch (_) {}
+
+  /* ⑥ 整体 & 上周 */
+  const wkCur  = calcBySrc(src, { wkSet: new Set([wk]) });
+  const wkPrev = calcBySrc(src, { wkSet: new Set([prevWk]) });
+  out.overall = {
+    cur:  { caseVolume: wkCur.caseVolume,  cpd: wkCur.cpd,  aht: wkCur.aht,  concurrency: wkCur.concurrency,  utilization: wkCur.utilization,  solveRate: wkCur.solveRate,  satisfaction: wkCur.satisfaction,  qualityPassRate: wkCur.qualityPassRate },
+    prev: { caseVolume: wkPrev.caseVolume, cpd: wkPrev.cpd, aht: wkPrev.aht, concurrency: wkPrev.concurrency, utilization: wkPrev.utilization, solveRate: wkPrev.solveRate, satisfaction: wkPrev.satisfaction, qualityPassRate: wkPrev.qualityPassRate },
+  };
+
+  return out;
+}
+
+/* ============ Prompt 组装（强制结构化 + 引用数字） ============ */
+function buildAiPrompt(biz, wk, focus, ctx) {
   const focusMap = {
-    '综合': '请对整份周报做全面解读：核心表现、最大变化、风险点、改进建议。',
-    '30S':  '重点围绕 30S 接起率：达标情况、Miss 分布、超预测影响、改进方向。',
-    'AHT':  '重点围绕 AHT 与人效：AHT 变化、二级打点影响值、CPD / 并发 / 利用率。',
-    '质量': '重点围绕质量指标：解决率、满意度、质检合格率，以及分类（首月/次月/老人）差异。',
-    '对比': '重点做环比分析：本周 vs 上周的主要变化、异常指标、拐点信号。',
+    '综合': '对整份周报做全面深度解读。',
+    '30S':  '仅聚焦 30S 接起率：达标/缺口、Miss 分布、超预测影响、时段/员工归因、改进路径。其他指标一笔带过。',
+    'AHT':  '仅聚焦 AHT 与人效：AHT 环比、二级打点影响值、CPD/并发/利用率、人效与工作量的关系。其他指标一笔带过。',
+    '质量': '仅聚焦质量：解决率、满意度、质检合格率，以及首月/次月/老人的分类差异。其他指标一笔带过。',
+    '对比': '仅做环比分析：本周 vs 上周所有指标，重点找"拐点/异常/隐藏风险"，不做泛泛评价。',
   };
   const focusText = focusMap[focus] || focusMap['综合'];
+
   const system = [
-    '你是一位资深的客服运营数据分析师，擅长从数据中提炼结论、发现异常、给出可落地的建议。',
-    '输出要求：',
-    '1. 结论先行，第一段直接给出核心判断（不超过 3 句）；',
-    '2. 用数据说话，引用具体数字；',
-    '3. 分点列出，每条独立成段，可执行；',
-    '4. Markdown 格式，二级标题用 ##，三级用 ###；',
-    '5. 不写空话套话，不重复数据原文，聚焦"为什么"和"怎么办"；',
-    '6. 数据不足以支撑判断时，直接说明"数据不足"。',
+    '你是客服运营团队的数据分析师，擅长从明细数据中挖掘根因、定位问题、给出可落地的行动方案。',
+    '',
+    '【硬性要求】',
+    '1. 每条结论必须引用**具体数字**，禁止"有所提升""表现良好"这类没有数据支撑的空话。',
+    '2. 引用数字时精确到：具体日期、时段、员工姓名、组别、指标数值。',
+    '3. 发现异常时，先给现象 → 再给数据 → 再给推断的根因 → 最后给验证方法。',
+    '4. 所有建议必须包含【谁 + 做什么 + 预期效果 + 如何衡量】四要素。',
+    '5. 数据不足以支撑判断时，明确说"数据不足，需要 XX 才能判断"，不要编造。',
+    '6. 用中文，Markdown 格式输出。',
+    '',
+    '【分析框架（必须按此展开）】',
+    '## 一、核心判断（不超过 3 条）',
+    '- 每条一句话，必须带数字。例如：「30S 接起率 88.2%，缺口 300 单，主要矛盾是 16 日 16 时的超预测（偏差 123%）导致 12 单 Miss」',
+    '',
+    '## 二、关键异常（按严重度排序，3~5 条）',
+    '- 每条格式：**异常现象** → 数据支撑（引用明细） → 影响的指标 → 推断根因（1~2 句）',
+    '- 例：「周三（09-17）接起率 62.1%，是全周最低 → 该日 15-18 时 Miss 累计 28 单，占全周 Miss 的 22% → 根因：当日实际量 156，预测 121，偏差 129%」',
+    '',
+    '## 三、分维度钻取',
+    '按重点维度展开（30S 归因 / 时段分布 / 员工分布 / 分类对比 / 二级打点影响），每段要有具体数字。',
+    '',
+    '## 四、可执行建议（3~5 条）',
+    '- 每条必须包含【谁 + 做什么 + 预期效果 + 如何衡量】',
+    '- 例：「排班组：将 09-16 16 时段的坐席预测量从 30 调至 38（按偏差 123% 上调），预计可减少 8~10 单 Miss，衡量标准：下周该时段偏差降至 110% 以内」',
   ].join('\n');
 
-  const user = [
-    '以下是 ' + biz + ' 业务线 WK' + wk + ' 的周报数据（Markdown）：',
+  const ctxText = formatAiContext(ctx);
+
+  let user = [
+    '业务线：' + biz + '，周次：WK' + wk + '（对比 WK' + (wk - 1) + '）',
     '',
-    focusText,
+    '分析重点：' + focusText,
     '',
-    '按以下结构输出：',
-    '## 一、核心结论',
-    '## 二、异常与风险点',
-    '## 三、分项分析',
-    '## 四、改进建议（3~5 条，每条含"做什么 + 期望效果"）',
+    '=== 以下是本周结构化明细数据 ===',
     '',
-    '---',
+    ctxText,
     '',
-    '```markdown',
-    reportMd,
-    '```',
+    '=== 数据结束 ===',
+    '',
+    '请开始分析。记住：每条结论都要有数字，每条建议都要有行动人和衡量标准。',
   ].join('\n');
+
+  /* 附加原始周报文本（供 AI 参考整体叙事，数字以明细为准） */
+  if (ctx._reportMd) {
+    user += '\n\n=== 附：原始周报 Markdown（仅作叙事参考，数字以明细为准）===\n\n```markdown\n' + ctx._reportMd + '\n```\n';
+  }
 
   return [
     { role: 'system', content: system },
@@ -3577,7 +3713,121 @@ function buildAiPrompt(biz, wk, focus, reportMd) {
   ];
 }
 
-/* AI 主流程 */
+/* 把结构化上下文序列化成 AI 易读的紧凑文本 */
+function formatAiContext(ctx) {
+  const lines = [];
+  const n2 = v => (v == null || !isFinite(v)) ? '—' : (typeof v === 'number' ? v.toFixed(2) : String(v));
+  const p2 = v => (v == null || !isFinite(v)) ? '—' : (v * 100).toFixed(2) + '%';
+  const i0 = v => (v == null || !isFinite(v)) ? '—' : String(Math.round(v));
+  const sgn = v => (v == null || !isFinite(v)) ? '—' : ((v >= 0 ? '+' : '') + n2(v));
+
+  /* 整体 */
+  const { cur, prev } = ctx.overall;
+  lines.push('【整体指标 · 本周 vs 上周】');
+  lines.push('  指标         | 本周      | 上周      | 变化');
+  lines.push('  CASE处理量   | ' + i0(cur.caseVolume) + ' | ' + i0(prev.caseVolume) + ' | ' + sgn(cur.caseVolume - prev.caseVolume));
+  lines.push('  CPD          | ' + n2(cur.cpd) + ' | ' + n2(prev.cpd) + ' | ' + sgn(cur.cpd != null && prev.cpd != null ? cur.cpd - prev.cpd : null));
+  lines.push('  AHT          | ' + n2(cur.aht) + ' | ' + n2(prev.aht) + ' | ' + sgn(cur.aht != null && prev.aht != null ? cur.aht - prev.aht : null));
+  lines.push('  并发         | ' + n2(cur.concurrency) + ' | ' + n2(prev.concurrency) + ' | ' + sgn(cur.concurrency != null && prev.concurrency != null ? cur.concurrency - prev.concurrency : null));
+  lines.push('  工时利用率   | ' + p2(cur.utilization) + ' | ' + p2(prev.utilization));
+  lines.push('  解决率       | ' + p2(cur.solveRate) + ' | ' + p2(prev.solveRate));
+  lines.push('  满意度       | ' + p2(cur.satisfaction) + ' | ' + p2(prev.satisfaction));
+  lines.push('  质检合格率   | ' + p2(cur.qualityPassRate) + ' | ' + p2(prev.qualityPassRate));
+  lines.push('');
+
+  /* 30S */
+  if (ctx.s30) {
+    const s = ctx.s30;
+    lines.push('【30S 接起率 · 整体】');
+    lines.push('  接起率=' + p2(s.totRate) + '（阈值 ' + p2(s.th) + '，' + (s.hit ? '达标' : '未达标') + '），分子=' + i0(s.totNum) + '，分母=' + i0(s.totDen) + '，Miss=' + i0(s.totDen - s.totNum));
+    if (!s.hit && s.gapNum != null) lines.push('  缺口=' + s.gapNum + ' 单（按公式 (分子+X)/(分母+X)=目标）');
+    if (s.totFc > 0) lines.push('  预测量合计=' + i0(s.totFc) + '，实际/预测偏差=' + p2(s.totBias));
+    lines.push('');
+
+    lines.push('【30S 日度明细（每日接起率 / Miss / 预测偏差）】');
+    lines.push('  日期       | 接起率   | Miss | 服务量 | 预测量 | 偏差    | 是否达标');
+    for (const d of s.days) {
+      lines.push('  ' + d.date + ' | ' + p2(d.rate) + ' | ' + d.miss + ' | ' + i0(d.den) + ' | ' + (d.forecast > 0 ? i0(d.forecast) : '—') + ' | ' + p2(d.bias) + ' | ' + (d.hit ? '✅' : '❌'));
+    }
+    lines.push('');
+
+    if (s.periods.length) {
+      lines.push('【30S 时段明细（按时段聚合 · 按 Miss 降序 Top 10）】');
+      lines.push('  时段 | 接起率   | Miss | 服务量 | 预测量 | 偏差');
+      const sorted = s.periods.slice().sort((a, b) => b.miss - a.miss).slice(0, 10);
+      for (const p of sorted) {
+        lines.push('  ' + p.period + '时 | ' + p2(p.rate) + ' | ' + p.miss + ' | ' + i0(p.den) + ' | ' + (p.forecast > 0 ? i0(p.forecast) : '—') + ' | ' + p2(p.bias));
+      }
+      lines.push('');
+    }
+
+    if (s.emps.length) {
+      lines.push('【30S 员工维度 · 按 Miss 降序 Top 15】');
+      lines.push('  排名 | 姓名 | 接起率   | Miss | 服务量');
+      s.emps.forEach((e, i) => {
+        lines.push('  ' + (i + 1) + ' | ' + e.name + ' | ' + p2(e.rate) + ' | ' + e.miss + ' | ' + i0(e.den));
+      });
+      lines.push('');
+    }
+
+    if (s.impacts && s.impacts.length) {
+      lines.push('【30S 超预测 & 未达标 影响值明细 · 按周度影响升序 Top 10】');
+      lines.push('  日期 | 时段 | 预测量 | 实际量 | 偏差 | Miss | 时段接起率 | 日度影响 | 周度影响');
+      for (const x of s.impacts) {
+        lines.push('  ' + x.date + ' | ' + x.period + '时 | ' + i0(x.forecast) + ' | ' + i0(x.den) + ' | ' + p2(x.bias) + ' | ' + x.miss + ' | ' + p2(x.rate) + ' | ' + (x.dayImpact >= 0 ? '+' : '') + (x.dayImpact * 100).toFixed(2) + 'pp | ' + (x.weekImpact >= 0 ? '+' : '') + (x.weekImpact * 100).toFixed(2) + 'pp');
+      }
+      lines.push('');
+    }
+  }
+
+  /* 分类明细 */
+  if (ctx.byCat && Object.keys(ctx.byCat).length) {
+    lines.push('【分类明细（首月/次月/老人）】');
+    lines.push('  分类 | 人数 | CASE | CPD(本周/上周) | AHT(本周/上周) | 解决率(本周/上周) | 满意度(本周/上周)');
+    for (const cat of ['首月','次月','老人']) {
+      const c = ctx.byCat[cat];
+      if (!c) continue;
+      lines.push('  ' + cat + ' | ' + c.count + ' | ' + i0(c.caseVolume) + ' | ' + n2(c.cpd) + '/' + n2(c.prevCpd) + ' | ' + n2(c.aht) + '/' + n2(c.prevAht) + ' | ' + p2(c.solveRate) + '/' + p2(c.prevSolveRate) + ' | ' + p2(c.satisfaction) + '/' + p2(c.prevSatisfaction));
+    }
+    lines.push('');
+  }
+
+  /* 组别明细 */
+  if (ctx.groups && ctx.groups.length) {
+    lines.push('【组别明细】');
+    lines.push('  组别 | 人数 | CASE | CPD(本周/上周) | AHT | 解决率 | 满意度');
+    for (const g of ctx.groups) {
+      lines.push('  ' + g.name + ' | ' + g.count + ' | ' + i0(g.caseVolume) + ' | ' + n2(g.cpd) + '/' + n2(g.prevCpd) + ' | ' + n2(g.aht) + ' | ' + p2(g.solveRate) + ' | ' + p2(g.satisfaction));
+    }
+    lines.push('');
+  }
+
+  /* 员工明细 */
+  if (ctx.emps && ctx.emps.length) {
+    const sorted = ctx.emps.slice().sort((a, b) => b.caseVolume - a.caseVolume).slice(0, 20);
+    lines.push('【员工明细 · 按 CASE 降序 Top 20】');
+    lines.push('  姓名 | 组别 | 分类 | CASE | CPD | AHT | 解决率 | 满意度 | 质检率 | 上周CPD');
+    for (const e of sorted) {
+      lines.push('  ' + e.name + ' | ' + e.group + ' | ' + e.category + ' | ' + i0(e.caseVolume) + ' | ' + n2(e.cpd) + ' | ' + n2(e.aht) + ' | ' + p2(e.solveRate) + ' | ' + p2(e.satisfaction) + ' | ' + p2(e.qualityPassRate) + ' | ' + n2(e.prevCpd));
+    }
+    lines.push('');
+  }
+
+  /* 二级打点 AHT */
+  if (ctx.aht2 && ctx.aht2.length) {
+    lines.push('【二级打点 AHT · 按影响值绝对值降序 Top 15】');
+    lines.push('  一级 | 二级 | AHT(本周/上周) | 服务量(本周/上周) | 影响值');
+    for (const o of ctx.aht2) {
+      const imp = o.impact == null ? '—' : ((o.impact > 0 ? '+' : '') + o.impact.toFixed(2));
+      lines.push('  ' + o.l1 + ' | ' + o.l2 + ' | ' + n2(o.ahtNow) + '/' + n2(o.ahtPrev) + ' | ' + i0(o.volNow) + '/' + i0(o.volPrev) + ' | ' + imp);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/* ============ AI 主流程 ============ */
 async function runAiAnalysis() {
   const keyEl = $('#aiKey');
   const modelEl = $('#aiModel');
@@ -3601,18 +3851,22 @@ async function runAiAnalysis() {
   const biz = (bizEl && bizEl.value) || '买手合作';
   const wk = parseInt((wkEl && wkEl.value) || '', 10) || S.latestWK;
 
-  let reportMd = '';
-  try { reportMd = reportToText(buildReport(biz, wk)); }
-  catch (e) {
-    outEl.innerHTML = '<div class="ai-err">❌ 生成周报文本失败：' + esc(e.message) + '</div>';
+  /* 组装明细上下文 */
+  let ctx = null;
+  try {
+    const reportMd = reportToText(buildReport(biz, wk));
+    ctx = buildAiContextData(biz, wk);
+    ctx._reportMd = reportMd;
+  } catch (e) {
+    outEl.innerHTML = '<div class="ai-err">❌ 生成上下文失败：' + esc(e.message) + '</div>';
     return;
   }
-  if (!reportMd || reportMd.length < 80) {
-    outEl.innerHTML = '<div class="ai-err">❌ 周报数据为空或过短，无法分析。请先在周报页选择有数据的周次。</div>';
+  if (!ctx || ((!ctx.emps || !ctx.emps.length) && !ctx.s30)) {
+    outEl.innerHTML = '<div class="ai-err">❌ 数据不足（无员工/无 30S 记录），无法分析。请确认当前周次有数据。</div>';
     return;
   }
 
-  const messages = buildAiPrompt(biz, wk, focus, reportMd);
+  const messages = buildAiPrompt(biz, wk, focus, ctx);
 
   _aiStreaming = true;
   if (btnRun) { btnRun.disabled = true; btnRun.textContent = '分析中…'; }
@@ -3680,7 +3934,6 @@ function initAiPanel() {
   if (keyEl) keyEl.addEventListener('change', () => saveAiConfig(keyEl.value.trim(), null));
   if (modelEl) modelEl.addEventListener('change', () => saveAiConfig(null, modelEl.value));
 }
-
 /* ---------------- 全局刷新 ---------------- */
 function refreshAll() {
   if (!S.records.length && !S.wtRecords.length && !S.inspections.length) return;
