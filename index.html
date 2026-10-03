@@ -36,6 +36,7 @@
   <button data-view="aht2">📈 AHT</button>
   <button data-view="sla">🎯 达成SLA</button>
   <button data-view="attendance">🗓 出勤</button>
+  <button data-view="forecast">🔮 时段预测</button>
   <button data-view="export">🖼 导出</button>
   <button data-view="report">📄 周报</button>
 </nav>
@@ -183,6 +184,58 @@
         </div>
       </div>
       <div id="attBody"></div>
+    </div>
+  </section>
+
+  <section id="view-forecast" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>🔮 时段量预测 <span class="help" data-tip="用历史时段占比，按你输入的日度总量分配出每个时段的预测量；支持周末/节假日区分，并接入 AI 做进一步分析与修正。">?</span></h2>
+        <div class="head-controls">
+          <label>业务线 <select id="fcBiz"></select></label>
+        </div>
+      </div>
+
+      <div class="fc-config">
+        <label>样本周数
+          <select id="fcSampleWeeks">
+            <option value="2">近 2 周</option>
+            <option value="4" selected>近 4 周</option>
+            <option value="6">近 6 周</option>
+            <option value="8">近 8 周</option>
+          </select>
+        </label>
+        <label>计算维度
+          <select id="fcMetric">
+            <option value="volume" selected>人工服务量</option>
+            <option value="s30Den">30S 分母</option>
+          </select>
+        </label>
+        <label>起始日期
+          <input type="date" id="fcStartDate">
+        </label>
+        <label>预测天数
+          <select id="fcDays">
+            <option value="7" selected>未来 7 天</option>
+            <option value="14">未来 14 天</option>
+          </select>
+        </label>
+      </div>
+
+      <h3 class="sub-title">📅 日度总量输入（每行填一天的总量）</h3>
+      <div class="fc-daily-grid" id="fcDailyGrid"></div>
+
+      <div class="head-controls" style="margin-top:14px">
+        <button id="btnFcRun" class="btn primary">生成时段预测</button>
+        <button id="btnFcAi" class="btn primary" style="background:#7B8FBF">🤖 AI 深度分析</button>
+        <button id="btnFcCopy" class="btn sm">📋 复制 Markdown</button>
+        <button id="btnFcClear" class="btn sm">清空输入</button>
+      </div>
+
+      <div id="fcResult" class="table-scroll" style="margin-top:14px"></div>
+      <div id="fcNotes" class="muted" style="margin-top:10px"></div>
+
+      <div id="fcAiOut" class="ai-out" style="margin-top:14px;display:none"></div>
     </div>
   </section>
 

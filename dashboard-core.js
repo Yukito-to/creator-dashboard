@@ -1,6 +1,6 @@
 /* ============================================================
    创作者数据分析 · 核心层
-   （常量 / 状态 / 工具 / 文件解析 / 数据聚合 / 目标读取）
+   （常量 / 状态 / 工具 / 文件解析 / 数据聚合 / 目标读取 / 时段预测算法）
    ============================================================ */
 'use strict';
 
@@ -932,6 +932,330 @@ function darkenColor(hex, factor) {
   const f = factor || 0.88;
   const to2 = c => Math.max(0, Math.round(c * f)).toString(16).padStart(2, '0');
   return '#' + to2(r) + to2(g) + to2(b);
+}
+
+/* ====================================================================
+   时段量预测 · 核心算法
+   ==================================================================== */
+
+/* 计算「日期类型 × 时段」平均占比 + 每时段 30S 接起率 */
+function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
+  const latest = refDate || S.latestDate;
+  if (!latest) return null;
+  const startDate = dateAdd(latest, -(sampleWeeks * 7 - 1));
+
+  const dayMap = new Map();
+  for (const r of S.records) {
+    if (r.biz !== biz) continue;
+    if (r.date < startDate || r.date > latest) continue;
+    if (!dayMap.has(r.date)) dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {} });
+    const d = dayMap.get(r.date);
+    const v = num(r[metricKey]) || 0;
+    const p = normPeriod(r.period) || '—';
+    d.periods[p] = (d.periods[p] || 0) + v;
+    d.total += v;
+    if (!d.s30[p]) d.s30[p] = { num: 0, den: 0 };
+    d.s30[p].num += num(r.s30Num) || 0;
+    d.s30[p].den += num(r.s30Den) || 0;
+  }
+
+  const groups = { weekday: {}, weekend: {} };
+  const s30Groups = { weekday: {}, weekend: {} };
+  let wdCount = 0, weCount = 0;
+  const dailyStats = [];
+
+  for (const d of dayMap.values()) {
+    if (d.total <= 0) continue;
+    const wd = new Date(d.date + 'T00:00:00Z').getUTCDay();
+    const isWeekend = (wd === 0 || wd === 6);
+    const type = isWeekend ? 'weekend' : 'weekday';
+    if (isWeekend) weCount++; else wdCount++;
+
+    for (const p in d.periods) {
+      const share = d.periods[p] / d.total;
+      if (!groups[type][p]) groups[type][p] = [];
+      groups[type][p].push(share);
+    }
+    for (const p in d.s30) {
+      const s = d.s30[p];
+      if (s.den <= 0) continue;
+      if (!s30Groups[type][p]) s30Groups[type][p] = [];
+      s30Groups[type][p].push(s.num / s.den);
+    }
+    dailyStats.push({
+      date: d.date, total: d.total, isWeekend,
+      periods: Object.assign({}, d.periods),
+      s30: Object.assign({}, d.s30),
+    });
+  }
+
+  const avg = (group) => {
+    const out = {};
+    for (const p in group) {
+      const arr = group[p];
+      out[p] = arr.reduce((s, x) => s + x, 0) / arr.length;
+    }
+    return out;
+  };
+  const median = (group) => {
+    const out = {};
+    for (const p in group) {
+      const arr = group[p].slice().sort((a, b) => a - b);
+      const n = arr.length;
+      out[p] = n % 2 ? arr[(n - 1) / 2] : (arr[n / 2 - 1] + arr[n / 2]) / 2;
+    }
+    return out;
+  };
+
+  const weekdayRaw = median(groups.weekday);
+  const weekendRaw = median(groups.weekend);
+
+  const normalize = (obj) => {
+    let sum = 0;
+    for (const p in obj) sum += obj[p];
+    if (sum <= 0) return obj;
+    const out = {};
+    for (const p in obj) out[p] = obj[p] / sum;
+    return out;
+  };
+
+  const weekday = normalize(weekdayRaw);
+  const weekendFinal = Object.keys(weekendRaw).length > 0 ? normalize(weekendRaw) : weekday;
+
+  const weekdayS30 = avg(s30Groups.weekday);
+  const weekendS30 = avg(s30Groups.weekend);
+  const weekendS30Final = Object.keys(weekendS30).length > 0 ? weekendS30 : weekdayS30;
+
+  const abnormalDays = [];
+  for (const d of dailyStats) {
+    const type = d.isWeekend ? 'weekend' : 'weekday';
+    const refShare = d.isWeekend ? weekendFinal : weekday;
+    let maxDev = 0, devPeriod = '';
+    for (const p in d.periods) {
+      if (refShare[p] == null) continue;
+      const actualShare = d.periods[p] / d.total;
+      const dev = refShare[p] > 0 ? Math.abs(actualShare - refShare[p]) / refShare[p] : 0;
+      if (dev > maxDev) { maxDev = dev; devPeriod = p; }
+    }
+    const sameType = dailyStats.filter(x => x.isWeekend === d.isWeekend);
+    const avgTotal = sameType.reduce((s, x) => s + x.total, 0) / sameType.length;
+    const totalDev = avgTotal > 0 ? Math.abs(d.total - avgTotal) / avgTotal : 0;
+    if (maxDev > 0.5 || totalDev > 0.4) {
+      abnormalDays.push({
+        date: d.date, isWeekend: d.isWeekend,
+        total: d.total,
+        avgTotal: Math.round(avgTotal),
+        totalDevPct: (totalDev * 100).toFixed(1),
+        maxShareDev: (maxDev * 100).toFixed(1),
+        maxDevPeriod: devPeriod,
+      });
+    }
+  }
+
+  return {
+    weekday, weekend: weekendFinal,
+    weekdayS30, weekendS30: weekendS30Final,
+    weekdayCount: wdCount, weekendCount: weCount,
+    sampleRange: { start: startDate, end: latest },
+    dailyStats, abnormalDays,
+  };
+}
+
+/* 生成时段预测 */
+function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays) {
+  const stats = calcPeriodStats(biz, metricKey, sampleWeeks);
+  if (!stats) return null;
+
+  const results = [];
+  for (let i = 0; i < days; i++) {
+    const date = dateAdd(startDate, i);
+    if (!date) continue;
+    const wd = new Date(date + 'T00:00:00Z').getUTCDay();
+    const isWeekend = (wd === 0 || wd === 6);
+    const isHoliday = holidays.has(date);
+
+    const share = (isHoliday || isWeekend) ? stats.weekend : stats.weekday;
+    const s30Rate = (isHoliday || isWeekend) ? stats.weekendS30 : stats.weekdayS30;
+
+    const total = num(dailyTotals[date]);
+    const row = { date, isWeekend, isHoliday, total, periods: {}, s30Rate };
+    for (const p in share) row.periods[p] = total * share[p];
+    results.push(row);
+  }
+  return { stats, results };
+}
+
+/* 把预测结果转成 Markdown */
+function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
+  if (!forecast) return '';
+  const { stats, results } = forecast;
+  const metricLbl = metricKey === 's30Den' ? '30S 分母' : '人工服务量';
+  const lines = [];
+  lines.push('# ' + biz + ' · 时段量预测');
+  lines.push('');
+  lines.push('- 样本周期：' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '（近 ' + sampleWeeks + ' 周）');
+  lines.push('- 计算维度：' + metricLbl);
+  lines.push('- 样本天数：工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天');
+  lines.push('');
+
+  const allPeriods = new Set();
+  for (const r of results) for (const p in r.periods) allPeriods.add(p);
+  const periodList = Array.from(allPeriods).sort((a, b) => {
+    const ai = parseInt(a, 10), bi = parseInt(b, 10);
+    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
+    return String(a).localeCompare(String(b));
+  });
+
+  lines.push('| 时段 | ' + results.map(r => {
+    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
+    const tag = r.isHoliday ? '🎌' : (r.isWeekend ? '🌴' : '');
+    return r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + tag;
+  }).join(' | ') + ' |');
+  lines.push('| --- |' + results.map(() => ' ---: |').join(''));
+
+  for (const p of periodList) {
+    const cells = results.map(r => {
+      const v = r.periods[p] || 0;
+      return r.total > 0 ? String(Math.round(v)) : '—';
+    });
+    lines.push('| ' + p + '时 | ' + cells.join(' | ') + ' |');
+  }
+  lines.push('| **合计** | ' + results.map(r => '**' + (r.total > 0 ? Math.round(r.total) : '—') + '**').join(' | ') + ' |');
+  lines.push('');
+  return lines.join('\n');
+}
+
+/* 构建 AI 分析用的预测上下文 */
+function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays, forecast) {
+  const { stats, results } = forecast;
+
+  const allPeriods = new Set();
+  for (const p in stats.weekday) allPeriods.add(p);
+  for (const p in stats.weekend) allPeriods.add(p);
+  const periodList = Array.from(allPeriods).sort((a, b) => {
+    const ai = parseInt(a, 10), bi = parseInt(b, 10);
+    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
+    return String(a).localeCompare(String(b));
+  });
+
+  const historyDetail = stats.dailyStats.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(d => {
+    const row = {
+      date: d.date,
+      weekday: WEEKDAY_CN[new Date(d.date + 'T00:00:00Z').getUTCDay()],
+      type: d.isWeekend ? '周末' : '工作日',
+      total: Math.round(d.total),
+      periods: {},
+    };
+    for (const p of periodList) {
+      const v = d.periods[p] || 0;
+      const share = d.total > 0 ? v / d.total : 0;
+      const s30 = d.s30[p];
+      const s30Rate = (s30 && s30.den > 0) ? s30.num / s30.den : null;
+      row.periods[p] = {
+        val: Math.round(v),
+        share: (share * 100).toFixed(2) + '%',
+        s30Rate: s30Rate == null ? null : (s30Rate * 100).toFixed(2) + '%',
+      };
+    }
+    return row;
+  });
+
+  const avgShare = {
+    weekday: Object.fromEntries(Object.entries(stats.weekday).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+    weekend: Object.fromEntries(Object.entries(stats.weekend).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+  };
+  const avgS30 = {
+    weekday: Object.fromEntries(Object.entries(stats.weekdayS30).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+    weekend: Object.fromEntries(Object.entries(stats.weekendS30).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+  };
+
+  const forecastRows = results.map(r => {
+    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
+    return {
+      date: r.date,
+      weekday: WEEKDAY_CN[wd],
+      isWeekend: r.isWeekend,
+      isHoliday: r.isHoliday,
+      total: Math.round(r.total),
+      periods: Object.fromEntries(periodList.map(p => [p, Math.round(r.periods[p] || 0)])),
+    };
+  });
+
+  return {
+    biz, metricKey, sampleWeeks, startDate, days,
+    sampleRange: stats.sampleRange,
+    weekdayCount: stats.weekdayCount,
+    weekendCount: stats.weekendCount,
+    periodList,
+    avgShare,
+    avgS30,
+    abnormalDays: stats.abnormalDays,
+    historyDetail,
+    forecastRows,
+    thresholds: {
+      s30Rate: s30Threshold(biz),
+    },
+  };
+}
+
+/* 把上下文格式化为 AI 可读文本 */
+function formatForecastAiContext(ctx) {
+  const L = [];
+  const metricLbl = ctx.metricKey === 's30Den' ? '30S 分母' : '人工服务量';
+
+  L.push('【基本信息】');
+  L.push('  业务线：' + ctx.biz);
+  L.push('  计算维度：' + metricLbl);
+  L.push('  样本周期：' + ctx.sampleRange.start + ' ~ ' + ctx.sampleRange.end + '（' + ctx.sampleWeeks + ' 周）');
+  L.push('  样本天数：工作日 ' + ctx.weekdayCount + ' 天 / 周末 ' + ctx.weekendCount + ' 天');
+  L.push('  30S 接起率阈值：' + (ctx.thresholds.s30Rate * 100).toFixed(2) + '%');
+  L.push('');
+
+  L.push('【平均时段占比（用中位数计算，抗异常值）】');
+  L.push('  时段 | 工作日占比 | 周末占比 | 工作日30S | 周末30S');
+  for (const p of ctx.periodList) {
+    const ws = ctx.avgShare.weekday[p] || '—';
+    const es = ctx.avgShare.weekend[p] || '—';
+    const wr = ctx.avgS30.weekday[p] || '—';
+    const er = ctx.avgS30.weekend[p] || '—';
+    L.push('  ' + p + '时 | ' + ws + ' | ' + es + ' | ' + wr + ' | ' + er);
+  }
+  L.push('');
+
+  if (ctx.abnormalDays.length) {
+    L.push('【⚠ 疑似异常天（占比偏差>50% 或 总量偏差>40%）】');
+    L.push('  日期 | 类型 | 总量 | 同类型均值 | 总量偏差 | 最大时段占比偏差');
+    for (const d of ctx.abnormalDays) {
+      L.push('  ' + d.date + ' | ' + (d.isWeekend ? '周末' : '工作日') + ' | ' + d.total + ' | ' + d.avgTotal + ' | ' + d.totalDevPct + '% | ' + d.maxShareDev + '%（' + d.maxDevPeriod + '时）');
+    }
+    L.push('');
+  } else {
+    L.push('【⚠ 疑似异常天】未检出显著异常。');
+    L.push('');
+  }
+
+  L.push('【历史每日明细（日期 / 类型 / 总量 / 每时段占比 / 30S接起率）】');
+  L.push('  日期 | 类型 | 总量 | ' + ctx.periodList.map(p => p + '时占比(30S)').join(' | '));
+  for (const d of ctx.historyDetail) {
+    const cells = ctx.periodList.map(p => {
+      const v = d.periods[p];
+      if (!v || v.val === 0) return '—';
+      return v.share + (v.s30Rate ? '(' + v.s30Rate + ')' : '');
+    });
+    L.push('  ' + d.date + ' | ' + d.type + ' | ' + d.total + ' | ' + cells.join(' | '));
+  }
+  L.push('');
+
+  L.push('【未来预测（基于历史占比的原始计算值）】');
+  L.push('  日期 | 类型 | 总量 | ' + ctx.periodList.map(p => p + '时').join(' | '));
+  for (const r of ctx.forecastRows) {
+    const type = r.isHoliday ? '节假日' : (r.isWeekend ? '周末' : '工作日');
+    const cells = ctx.periodList.map(p => r.periods[p] || 0);
+    L.push('  ' + r.date + '(' + r.weekday + ') | ' + type + ' | ' + r.total + ' | ' + cells.join(' | '));
+  }
+  L.push('');
+
+  return L.join('\n');
 }
 
 /* ============================================================

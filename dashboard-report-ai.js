@@ -1805,7 +1805,7 @@ function buildMonthContext(biz, wk, focus) {
   };
 }
 
-/* ==================== 组装 AI 上下文（按 focus 过滤数据 + 质量日度/员工明细） ==================== */
+/* ==================== 组装 AI 上下文（按 focus 过滤） ==================== */
 function buildAiContextData(biz, wk, focus) {
   focus = focus || '综合';
   const src = bizToSrc(biz);
@@ -1851,7 +1851,7 @@ function buildAiContextData(biz, wk, focus) {
     }
   }
 
-  /* ①.5 质量指标日度明细（focus=质量/综合/对比时给） */
+  /* ①.5 质量指标日度明细 */
   if (needQuality) {
     const qDayMap = new Map();
     const recs = S.records.filter(r => r.src === src && r.wk === wk);
@@ -1866,7 +1866,6 @@ function buildAiContextData(biz, wk, focus) {
       d.satisfy += r.satisfy;
       d.satisfyEval += r.satisfyEval;
     }
-    /* 质检按日期 */
     const inspByDay = new Map();
     for (const r of S.inspections) {
       if (r.src !== src || r.wk !== wk) continue;
@@ -1885,7 +1884,6 @@ function buildAiContextData(biz, wk, focus) {
       };
     });
 
-    /* 员工维度的质量明细 */
     const qEmps = [];
     for (const e of S.roster.filter(x => employeeVisible(x) && srcEmps.has(x.name))) {
       const nameSet = new Set([e.name]);
@@ -1955,7 +1953,7 @@ function buildAiContextData(biz, wk, focus) {
     }
   } catch (_) {}
 
-  /* ③ 员工明细（按 focus 精简字段） */
+  /* ③ 员工明细 */
   const allEmps = S.roster.filter(e => employeeVisible(e) && srcEmps.has(e.name));
   for (const e of allEmps) {
     const nameSet = new Set([e.name]);
@@ -1980,7 +1978,7 @@ function buildAiContextData(biz, wk, focus) {
     out.emps.push(row);
   }
 
-  /* ④ 分类明细（按 focus 精简） */
+  /* ④ 分类明细 */
   for (const cat of ['首月','次月','老人']) {
     const names = allEmps.filter(e => (categoryOf(e, S.month) || '').includes(cat)).map(e => e.name);
     if (!names.length) continue;
@@ -2001,7 +1999,7 @@ function buildAiContextData(biz, wk, focus) {
     out.byCat[cat] = row;
   }
 
-  /* ⑤ 组别明细（按 focus 精简） */
+  /* ⑤ 组别明细 */
   const groupMap = {};
   for (const e of allEmps) { const g = e.group || '—'; (groupMap[g] = groupMap[g] || []).push(e.name); }
   out.groups = Object.keys(groupMap).sort().map(g => {
@@ -2021,7 +2019,7 @@ function buildAiContextData(biz, wk, focus) {
     return row;
   }).filter(g => g.caseVolume != null ? g.caseVolume > 0 : true);
 
-  /* ⑥ 二级打点 AHT（只 AHT 相关才给） */
+  /* ⑥ 二级打点 AHT */
   if (needAHT) {
     try {
       const aht2 = aht2ByWeek(biz, wk);
@@ -2060,7 +2058,7 @@ function buildAiContextData(biz, wk, focus) {
   return out;
 }
 
-/* ==================== AI Prompt 组装（含范围约束 + 指标纯度） ==================== */
+/* ==================== AI Prompt 组装 ==================== */
 function buildStage1Prompt(biz, wk, focus, ctx) {
   const scopeMap = {
     '综合': '所有维度',
@@ -2200,7 +2198,7 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
   ];
 }
 
-/* ==================== AI 上下文格式化（含质量日度/员工明细） ==================== */
+/* ==================== AI 上下文格式化 ==================== */
 function formatAiContext(ctx) {
   const lines = [];
   const focus = ctx.focus || '综合';
@@ -2213,7 +2211,6 @@ function formatAiContext(ctx) {
   const needAHT     = !!(ctx.aht2 && ctx.aht2.length) || focus === 'AHT';
   const needQuality = focus === '质量' || focus === '综合' || focus === '对比';
 
-  /* 基线 */
   if (ctx.baseline && ctx.baseline.weeks && ctx.baseline.weeks.length) {
     lines.push('【近 4 周基线（含本周，帮判断异常）】');
     const cols = ['WK', 'CASE'];
@@ -2241,7 +2238,6 @@ function formatAiContext(ctx) {
     }
   }
 
-  /* 整体 */
   const { cur, prev } = ctx.overall;
   lines.push('【整体指标 · 本周 vs 上周】');
   lines.push('  指标         | 本周      | 上周      | 变化');
@@ -2259,7 +2255,6 @@ function formatAiContext(ctx) {
   }
   lines.push('');
 
-  /* 30S 明细 */
   if (ctx.s30) {
     const s = ctx.s30;
     lines.push('【30S 接起率 · 整体】');
@@ -2300,7 +2295,6 @@ function formatAiContext(ctx) {
     }
   }
 
-  /* 质量指标日度明细（新增） */
   if (ctx.qualityDays && ctx.qualityDays.length) {
     lines.push('【🎯 质量指标 · 日度明细（找具体哪一天最差）】');
     lines.push('  日期       | 解决率   | 满意度   | 质检合格率 | 抽检量');
@@ -2310,7 +2304,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 质量指标员工明细（新增） */
   if (ctx.qualityEmps && ctx.qualityEmps.length) {
     lines.push('【🎯 质量指标 · 员工维度（按解决率升序，最差在前 Top 15）】');
     lines.push('  姓名 | 组别 | 分类 | CASE | 解决率 | 满意度 | 质检率 | 解决评价量 | 满意评价量');
@@ -2321,7 +2314,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 分类明细 */
   if (ctx.byCat && Object.keys(ctx.byCat).length) {
     lines.push('【分类明细（本周）】');
     const cols = ['分类', '人数', 'CASE'];
@@ -2339,7 +2331,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 组别明细 */
   if (ctx.groups && ctx.groups.length) {
     lines.push('【组别明细（本周）】');
     const cols = ['组别', '人数', 'CASE'];
@@ -2355,7 +2346,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 员工明细 */
   if (ctx.emps && ctx.emps.length) {
     const sorted = ctx.emps.slice().sort((a, b) => (b.caseVolume || 0) - (a.caseVolume || 0)).slice(0, 25);
     lines.push('【员工明细 · Top 25】');
@@ -2374,7 +2364,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 二级打点 AHT */
   if (ctx.aht2 && ctx.aht2.length) {
     lines.push('【二级打点 AHT · 按影响绝对值 Top 15】');
     lines.push('  一级 | 二级 | AHT(本周/上周) | 服务量(本周/上周) | 影响值');
@@ -2385,7 +2374,6 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
-  /* 月度 */
   if (ctx.month) {
     lines.push('');
     lines.push(formatMonthContext(ctx.month));
@@ -2686,7 +2674,7 @@ function initAiPanel() {
 
 /* ==================== 全局初始化 ==================== */
 function initSelects() {
-  for (const s of ['#ovBiz','#peBiz','#tmBiz','#s30Biz','#a2Biz','#slaBiz','#exBiz','#rpBiz']) {
+  for (const s of ['#ovBiz','#peBiz','#tmBiz','#s30Biz','#a2Biz','#slaBiz','#exBiz','#rpBiz','#fcBiz']) {
     const el = $(s);
     if (!el) continue;
     const cur = el.value;
@@ -2713,6 +2701,13 @@ function initSelects() {
   refreshTeamOptions();
   refreshExportOptions();
   renderTargetConfig();
+
+  /* 时段预测：默认起始日期 = 最新日期 + 1 */
+  const fcStart = $('#fcStartDate');
+  if (fcStart && !fcStart.value) {
+    fcStart.value = S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10);
+  }
+  if (typeof renderForecastConfig === 'function') renderForecastConfig();
 }
 
 function bindEvents() {
@@ -2723,6 +2718,7 @@ function bindEvents() {
     switchView(b.dataset.view);
     if (b.dataset.view === 'report') renderTargetConfig();
     if (b.dataset.view === 'sla') renderSLA();
+    if (b.dataset.view === 'forecast') { renderForecastConfig(); renderForecastResult(); }
   });
   const dz = $('#dropZone'), fi = $('#fileInput');
   if (dz && fi) {
@@ -2758,6 +2754,9 @@ function bindEvents() {
     const a2 = $('#a2Body'); if (a2) a2.innerHTML = '';
     const sl = $('#slaBody'); if (sl) sl.innerHTML = '';
     const at = $('#attBody'); if (at) at.innerHTML = '';
+    const fc = $('#fcResult'); if (fc) fc.innerHTML = '';
+    const fn = $('#fcNotes'); if (fn) fn.innerHTML = '';
+    const fa = $('#fcAiOut'); if (fa) { fa.style.display = 'none'; fa.innerHTML = ''; }
     const ex = $('#exPreview'); if (ex) ex.innerHTML = '<div class="muted">选择条件后点击「生成预览」。</div>';
     const be = $('#btnExport'); if (be) be.disabled = true;
     const rb = $('#rpBody'); if (rb) rb.innerHTML = '';
@@ -2806,6 +2805,17 @@ function bindEvents() {
   on('#rpWK', 'change', renderReport);
   on('#btnRpCopy', 'click', copyReport);
   on('#btnRpMd', 'click', downloadReportMd);
+
+  /* 时段预测 */
+  on('#fcBiz', 'change', () => { renderForecastResult(); });
+  on('#fcStartDate', 'change', () => { renderForecastConfig(); renderForecastResult(); });
+  on('#fcDays', 'change', () => { renderForecastConfig(); renderForecastResult(); });
+  on('#fcSampleWeeks', 'change', renderForecastResult);
+  on('#fcMetric', 'change', renderForecastResult);
+  on('#btnFcRun', 'click', renderForecastResult);
+  on('#btnFcAi', 'click', runForecastAiAnalysis);
+  on('#btnFcCopy', 'click', copyForecastMd);
+  on('#btnFcClear', 'click', clearForecastInputs);
 }
 
 function init() {

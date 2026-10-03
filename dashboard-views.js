@@ -1,6 +1,6 @@
 /* ============================================================
    创作者数据分析 · 视图层
-   （表格行渲染 / 各 tab 视图 / 导出图片）
+   （表格渲染 / 各 tab 视图 / 导出 / 时段预测视图 + AI 分析）
    ============================================================ */
 'use strict';
 
@@ -182,6 +182,11 @@ function refreshAll() {
   renderAttendance();
   refreshExportOptions();
   renderReport();
+  const fcView = document.getElementById('view-forecast');
+  if (fcView && fcView.classList.contains('active')) {
+    renderForecastConfig();
+    renderForecastResult();
+  }
 }
 
 /* ==================== 导入摘要 & 字段映射 ==================== */
@@ -1190,6 +1195,347 @@ function downloadExport() {
   a.href = _lastBlobUrl;
   a.download = 'creator-analytics-' + biz + '-' + S.month + '.png';
   a.click();
+}
+
+/* ==================== 时段量预测 · 视图 ==================== */
+function renderForecastConfig() {
+  const grid = $('#fcDailyGrid');
+  if (!grid) return;
+  const startEl = $('#fcStartDate');
+  const daysEl = $('#fcDays');
+  if (!startEl || !daysEl) return;
+
+  if (!startEl.value) {
+    const defStart = S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10);
+    startEl.value = defStart;
+  }
+
+  const startDate = startEl.value;
+  const days = parseInt(daysEl.value || '7', 10);
+
+  const prevVals = {};
+  grid.querySelectorAll('input[type=number]').forEach(inp => { prevVals[inp.dataset.date] = inp.value; });
+  const prevHol = new Set();
+  grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => { prevHol.add(chk.dataset.date); });
+
+  const rows = [];
+  for (let i = 0; i < days; i++) {
+    const date = dateAdd(startDate, i);
+    if (!date) continue;
+    const wd = new Date(date + 'T00:00:00Z').getUTCDay();
+    const isWeekend = (wd === 0 || wd === 6);
+    const val = prevVals[date] != null ? prevVals[date] : '';
+    const checked = prevHol.has(date) ? ' checked' : '';
+    const cls = 'fc-daily-row' + (isWeekend ? ' fc-weekend' : '') + (checked ? ' fc-holiday-active' : '');
+    rows.push(
+      '<div class="' + cls + '">' +
+        '<span class="fc-daily-date">' + esc(date) + ' 周' + WEEKDAY_CN[wd] + '</span>' +
+        '<input type="number" inputmode="numeric" step="1" min="0" placeholder="输入日总量" data-date="' + date + '" value="' + esc(val) + '">' +
+        '<label class="fc-holiday"><input type="checkbox" data-date="' + date + '"' + checked + '> 节假日</label>' +
+      '</div>'
+    );
+  }
+  grid.innerHTML = rows.join('');
+
+  grid.querySelectorAll('.fc-holiday input[type=checkbox]').forEach(chk => {
+    chk.addEventListener('change', () => {
+      const row = chk.closest('.fc-daily-row');
+      if (row) row.classList.toggle('fc-holiday-active', chk.checked);
+    });
+  });
+}
+
+function renderForecastResult() {
+  const el = $('#fcResult');
+  const notes = $('#fcNotes');
+  if (!el) return;
+
+  const bizEl = $('#fcBiz');
+  const biz = (bizEl && bizEl.value) || '买手合作';
+  const metricEl = $('#fcMetric');
+  const metricKey = (metricEl && metricEl.value) || 'volume';
+  const sampleEl = $('#fcSampleWeeks');
+  const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
+  const startEl = $('#fcStartDate');
+  const startDate = startEl && startEl.value;
+  const daysEl = $('#fcDays');
+  const days = parseInt((daysEl && daysEl.value) || '7', 10);
+
+  if (!startDate) { el.innerHTML = '<p class="muted">请先选择起始日期。</p>'; if (notes) notes.innerHTML = ''; return; }
+
+  const grid = $('#fcDailyGrid');
+  const dailyTotals = {};
+  const holidays = new Set();
+  if (grid) {
+    grid.querySelectorAll('input[type=number]').forEach(inp => {
+      const v = parseFloat(inp.value);
+      if (!isNaN(v) && v > 0) dailyTotals[inp.dataset.date] = v;
+    });
+    grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => {
+      holidays.add(chk.dataset.date);
+    });
+  }
+
+  if (Object.keys(dailyTotals).length === 0) {
+    el.innerHTML = '<p class="muted">请至少输入一天的日度总量。</p>';
+    if (notes) notes.innerHTML = '';
+    return;
+  }
+
+  const forecast = generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays);
+  if (!forecast) {
+    el.innerHTML = '<p class="muted">样本数据不足，无法计算时段占比。请确认已导入员工数据。</p>';
+    if (notes) notes.innerHTML = '';
+    return;
+  }
+
+  const allPeriods = new Set();
+  for (const r of forecast.results) for (const p in r.periods) allPeriods.add(p);
+  const periodList = Array.from(allPeriods).sort((a, b) => {
+    const ai = parseInt(a, 10), bi = parseInt(b, 10);
+    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
+    return String(a).localeCompare(String(b));
+  });
+
+  if (!periodList.length) {
+    el.innerHTML = '<p class="muted">历史数据中未找到任何时段记录。</p>';
+    if (notes) notes.innerHTML = '';
+    return;
+  }
+
+  const head = '<tr><th>时段</th>' +
+    forecast.results.map(r => {
+      const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
+      const tag = r.isHoliday ? '🎌' : (r.isWeekend ? '🌴' : '');
+      return '<th>' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + tag +
+        '<br><span style="font-size:10px;color:#999;font-weight:400">' +
+        (r.total > 0 ? '总量 ' + Math.round(r.total) : '—') +
+        '</span></th>';
+    }).join('') + '</tr>';
+
+  const body = periodList.map(p => {
+    const tds = ['<td>' + esc(p) + '时</td>'];
+    for (const r of forecast.results) {
+      const v = r.periods[p] || 0;
+      tds.push('<td>' + (r.total > 0 ? Math.round(v) : '—') + '</td>');
+    }
+    return '<tr>' + tds.join('') + '</tr>';
+  }).join('');
+
+  const sumTds = ['<td style="font-weight:600">合计</td>'];
+  for (const r of forecast.results) {
+    sumTds.push('<td style="font-weight:600">' + (r.total > 0 ? Math.round(r.total) : '—') + '</td>');
+  }
+  const sumRow = '<tr style="background:#F4F3EF">' + sumTds.join('') + '</tr>';
+
+  el.innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + sumRow + '</tbody></table>';
+
+  if (notes) {
+    notes.innerHTML = '📊 样本周期：' + forecast.stats.sampleRange.start + ' ~ ' + forecast.stats.sampleRange.end +
+      '（近 ' + sampleWeeks + ' 周）｜ 工作日 ' + forecast.stats.weekdayCount + ' 天 / 周末 ' + forecast.stats.weekendCount +
+      ' 天 ｜ 🎌 节假日按周末占比 · 🌴 周末' +
+      (forecast.stats.weekendCount === 0 ? '（⚠ 周末样本不足，已回退工作日占比）' : '');
+  }
+}
+
+async function copyForecastMd() {
+  const bizEl = $('#fcBiz');
+  const biz = (bizEl && bizEl.value) || '买手合作';
+  const metricEl = $('#fcMetric');
+  const metricKey = (metricEl && metricEl.value) || 'volume';
+  const sampleEl = $('#fcSampleWeeks');
+  const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
+  const startEl = $('#fcStartDate');
+  const startDate = startEl && startEl.value;
+  const daysEl = $('#fcDays');
+  const days = parseInt((daysEl && daysEl.value) || '7', 10);
+
+  if (!startDate) { toast('请先选择起始日期'); return; }
+  const grid = $('#fcDailyGrid');
+  const dailyTotals = {};
+  const holidays = new Set();
+  grid.querySelectorAll('input[type=number]').forEach(inp => {
+    const v = parseFloat(inp.value);
+    if (!isNaN(v) && v > 0) dailyTotals[inp.dataset.date] = v;
+  });
+  grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => holidays.add(chk.dataset.date));
+
+  if (Object.keys(dailyTotals).length === 0) { toast('请至少输入一天的总量'); return; }
+
+  const forecast = generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays);
+  if (!forecast) { toast('样本数据不足'); return; }
+
+  const md = forecastToMarkdown(biz, metricKey, sampleWeeks, forecast);
+  try { await navigator.clipboard.writeText(md); toast('✅ 已复制到剪贴板'); }
+  catch (_) {
+    const ta = document.createElement('textarea');
+    ta.value = md;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('✅ 已复制到剪贴板'); }
+    catch (e) { toast('❌ 复制失败'); }
+    document.body.removeChild(ta);
+  }
+}
+
+function clearForecastInputs() {
+  const grid = $('#fcDailyGrid');
+  if (!grid) return;
+  grid.querySelectorAll('input[type=number]').forEach(inp => { inp.value = ''; });
+  grid.querySelectorAll('input[type=checkbox]').forEach(chk => { chk.checked = false; });
+  grid.querySelectorAll('.fc-holiday-active').forEach(el => el.classList.remove('fc-holiday-active'));
+  const el = $('#fcResult');
+  if (el) el.innerHTML = '';
+  const notes = $('#fcNotes');
+  if (notes) notes.innerHTML = '';
+  const aiOut = $('#fcAiOut');
+  if (aiOut) { aiOut.style.display = 'none'; aiOut.innerHTML = ''; }
+}
+
+/* ==================== 时段预测 · AI 深度分析 ==================== */
+async function runForecastAiAnalysis() {
+  const outEl = $('#fcAiOut');
+  const btn = $('#btnFcAi');
+  if (!outEl) return;
+
+  /* 校验配置 */
+  const bizEl = $('#fcBiz');
+  const biz = (bizEl && bizEl.value) || '买手合作';
+  const metricEl = $('#fcMetric');
+  const metricKey = (metricEl && metricEl.value) || 'volume';
+  const sampleEl = $('#fcSampleWeeks');
+  const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
+  const startEl = $('#fcStartDate');
+  const startDate = startEl && startEl.value;
+  const daysEl = $('#fcDays');
+  const days = parseInt((daysEl && daysEl.value) || '7', 10);
+
+  if (!startDate) { toast('请先选择起始日期'); return; }
+
+  const grid = $('#fcDailyGrid');
+  const dailyTotals = {};
+  const holidays = new Set();
+  grid.querySelectorAll('input[type=number]').forEach(inp => {
+    const v = parseFloat(inp.value);
+    if (!isNaN(v) && v > 0) dailyTotals[inp.dataset.date] = v;
+  });
+  grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => holidays.add(chk.dataset.date));
+
+  if (Object.keys(dailyTotals).length === 0) { toast('请至少输入一天的总量'); return; }
+
+  /* 校验 API Key */
+  const keyEl = $('#aiKey');
+  const apiKey = ((keyEl && keyEl.value) || '').trim();
+  if (!apiKey) {
+    outEl.style.display = 'block';
+    outEl.innerHTML = '<div class="ai-err">❌ 请先在「📄 周报」页填写智谱 API Key（可共用）。</div>';
+    return;
+  }
+
+  /* 生成基础预测 + AI 上下文 */
+  const forecast = generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays);
+  if (!forecast) { toast('样本数据不足'); return; }
+
+  const ctx = buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays, forecast);
+  const ctxText = formatForecastAiContext(ctx);
+
+  /* 取模型 */
+  const modelEl = $('#aiModel');
+  const model = (modelEl && modelEl.value) || 'glm-5.3-flash';
+
+  outEl.style.display = 'block';
+  outEl.innerHTML = '<div class="ai-cursor"></div>';
+  if (btn) { btn.disabled = true; btn.textContent = '分析中…'; }
+
+  /* 构造 Prompt */
+  const system = [
+    '你是资深的客服排班与容量规划专家，擅长从历史时段数据中发现问题并给出精细化预测修正方案。',
+    '',
+    '【核心任务】',
+    '我基于历史平均占比给出了未来几天的时段预测量。请你：',
+    '1. **识别历史数据中不合理的数值**（异常天），说明为什么不合理，并在计算最终占比时剔除它们。',
+    '2. **结合 30S 接起率**做调整——如果某时段接起率长期低于阈值，说明该时段处理能力不足，需适当上调预测量；反之若接起率远高于阈值且服务量偏低，可适当下调。',
+    '3. 输出**修正后的时段预测量**（保留每天的日总量不变，只调整时段内部分配）。',
+    '',
+    '【硬性要求】',
+    '1. 每条结论必须引用具体数字（日期、时段、占比、接起率）。',
+    '2. 调整幅度要保守，除非有明确证据；单时段调整幅度建议 ≤ 30%。',
+    '3. 输出结构必须严格如下：',
+    '',
+    '## 一、异常数据识别',
+    '列出你识别出的不合理历史数据（日期 + 原因 + 剔除理由）。',
+    '',
+    '## 二、调整依据',
+    '按 30S 接起率情况，逐时段说明是否需要调整及调整方向。',
+    '',
+    '## 三、修正后的时段预测量',
+    '用 Markdown 表格输出，行=时段，列=日期，与原始格式一致。',
+    '',
+    '## 四、调整说明',
+    '每条调整必须说明：哪个日期、哪个时段、从多少调到多少、为什么。',
+  ].join('\n');
+
+  const user = [
+    '业务线：' + biz,
+    '预测周期：' + startDate + ' 起 ' + days + ' 天',
+    '样本周期：' + ctx.sampleRange.start + ' ~ ' + ctx.sampleRange.end,
+    '',
+    '=== 以下是全部历史明细 + 原始预测 ===',
+    '',
+    ctxText,
+    '',
+    '=== 数据结束 ===',
+    '',
+    '请开始分析并输出修正后的时段预测量。',
+  ].join('\n');
+
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+
+  const controller = new AbortController();
+  let buffer = '';
+  let reasoningBuf = '';
+  const logs = [];
+  const render = () => {
+    const dbg = logs.length
+      ? '<div style="font-size:11px;color:#999;padding:4px 0;border-bottom:1px dashed #eee;margin-bottom:6px">' + logs.slice(-3).map(esc).join('<br>') + '</div>'
+      : '';
+    outEl.innerHTML = dbg + renderAiMarkdown(buffer) + (_aiStreaming ? '<span class="ai-cursor"></span>' : '');
+    outEl.scrollTop = outEl.scrollHeight;
+  };
+
+  _aiStreaming = true;
+  _aiAbort = controller;
+
+  try {
+    await callZhipuAI(
+      apiKey, model, messages,
+      (chunk, type) => {
+        if (type === 'reasoning') reasoningBuf += chunk;
+        else buffer += chunk;
+        render();
+      },
+      controller.signal,
+      (msg) => { logs.push('[调试] ' + msg); render(); }
+    );
+    _aiStreaming = false;
+    if (!buffer.trim() && reasoningBuf.trim()) buffer = reasoningBuf;
+    render();
+  } catch (err) {
+    _aiStreaming = false;
+    if (err && err.name === 'AbortError') {
+      toast('已停止生成');
+    } else {
+      const msg = String((err && err.message) || err);
+      outEl.innerHTML = '<div class="ai-err">❌ 调用失败：' + esc(msg) + '</div>';
+    }
+  } finally {
+    _aiStreaming = false;
+    _aiAbort = null;
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 深度分析'; }
+  }
 }
 
 /* ============================================================
