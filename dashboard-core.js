@@ -1,6 +1,5 @@
 /* ============================================================
    创作者数据分析 · 核心层
-   （常量 / 状态 / 工具 / 文件解析 / 数据聚合 / 目标读取 / 时段预测算法 / 节假日API）
    ============================================================ */
 'use strict';
 
@@ -97,7 +96,6 @@ function loadHolidayCache() {
     return cache;
   } catch (_) { return null; }
 }
-
 function buildHolidayMap(days) {
   const map = {};
   for (const d of days) {
@@ -106,7 +104,6 @@ function buildHolidayMap(days) {
   }
   return map;
 }
-
 async function loadHolidaysForYear(year) {
   const url = CN_HOLIDAY_API_BASE + '/' + year + '.json';
   try {
@@ -119,7 +116,6 @@ async function loadHolidaysForYear(year) {
     return null;
   }
 }
-
 async function initHolidayData() {
   const now = new Date();
   const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
@@ -127,44 +123,27 @@ async function initHolidayData() {
 
   const cache = loadHolidayCache();
   if (cache && cache.data) {
-    for (const y of years) {
-      if (cache.data[y]) result[y] = cache.data[y];
-    }
+    for (const y of years) if (cache.data[y]) result[y] = cache.data[y];
   }
-
   const missing = years.filter(y => !result[y]);
   if (missing.length) {
     const fetched = await Promise.all(missing.map(y => loadHolidaysForYear(y)));
-    missing.forEach((y, i) => {
-      if (fetched[i]) result[y] = fetched[i];
-    });
+    missing.forEach((y, i) => { if (fetched[i]) result[y] = fetched[i]; });
   }
-
   try {
-    localStorage.setItem(CN_HOLIDAY_CACHE_KEY, JSON.stringify({
-      timestamp: Date.now(),
-      data: result,
-    }));
+    localStorage.setItem(CN_HOLIDAY_CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: result }));
   } catch (_) {}
 
   _cnHolidayMap = {};
-  for (const y of years) {
-    if (result[y]) {
-      for (const d in result[y]) _cnHolidayMap[d] = result[y][d];
-    }
-  }
+  for (const y of years) if (result[y]) for (const d in result[y]) _cnHolidayMap[d] = result[y][d];
 
   const total = Object.keys(_cnHolidayMap).length;
   _cnHolidayVersion = total > 0
     ? 'API（' + years.join('/') + '，共 ' + total + ' 条）'
     : '内置（API 不可用）';
 
-  if (typeof renderForecastResult === 'function') {
-    try { renderForecastResult(); } catch (_) {}
-  }
-  if (typeof renderForecastConfig === 'function') {
-    try { renderForecastConfig(); } catch (_) {}
-  }
+  if (typeof renderForecastResult === 'function') { try { renderForecastResult(); } catch (_) {} }
+  if (typeof renderForecastConfig === 'function') { try { renderForecastConfig(); } catch (_) {} }
 }
 
 const CN_HOLIDAY_FALLBACK = {
@@ -196,12 +175,10 @@ const CN_HOLIDAY_FALLBACK = {
   '2026-10-04': 'holiday', '2026-10-05': 'holiday', '2026-10-06': 'holiday',
   '2026-10-07': 'holiday'
 };
-
 function getHolidayMap() {
   if (_cnHolidayMap && Object.keys(_cnHolidayMap).length > 0) return _cnHolidayMap;
   return CN_HOLIDAY_FALLBACK;
 }
-
 function classifyDate(date) {
   if (!date) return 'weekday';
   const map = getHolidayMap();
@@ -211,19 +188,16 @@ function classifyDate(date) {
   if (wd === 0 || wd === 6) return 'weekend';
   return 'weekday';
 }
-
 function shouldUseWeekendPattern(date) {
   if (S.forecastHolidays && S.forecastHolidays.has(date)) return true;
   if (S.forecastWorkdays && S.forecastWorkdays.has(date)) return false;
   const cls = classifyDate(date);
   return cls === 'holiday' || cls === 'weekend';
 }
-
 function dateTypeLabel(date) {
   const auto = classifyDate(date);
   const userHoliday = S.forecastHolidays && S.forecastHolidays.has(date);
   const userWorkday = S.forecastWorkdays && S.forecastWorkdays.has(date);
-
   if (userHoliday) {
     if (auto === 'weekend') return '周末';
     if (auto === 'holiday') return '节假日';
@@ -293,6 +267,202 @@ const wkStartDate = wk => dateAdd(WK_BASE_DATE, (wk - WK_BASE_NUM) * 7);
 const wkEndDate   = wk => dateAdd(wkStartDate(wk), 6);
 const weekdayOf   = d => d ? WEEKDAY_CN[new Date(d + 'T00:00:00Z').getUTCDay()] : '';
 
+/* ====================================================================
+   XLSX 导出工具（纯 JS，无依赖）
+   ==================================================================== */
+const _CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function _crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = _CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function _utf8(str) { return new TextEncoder().encode(str); }
+function _xmlEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+function _colLetter(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+function _buildSheetXml(rows, opts) {
+  opts = opts || {};
+  const L = [];
+  L.push('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
+  L.push('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">');
+  if (opts.cols && opts.cols.length) {
+    L.push('<cols>');
+    for (const c of opts.cols) L.push('<col min="' + c.min + '" max="' + c.max + '" width="' + c.width + '" customWidth="1"/>');
+    L.push('</cols>');
+  }
+  L.push('<sheetData>');
+  rows.forEach((row, ri) => {
+    const rNum = ri + 1;
+    L.push('<row r="' + rNum + '">');
+    row.forEach((cell, ci) => {
+      if (cell == null) return;
+      const ref = _colLetter(ci + 1) + rNum;
+      const sAttr = (cell.s != null) ? (' s="' + cell.s + '"') : '';
+      if (cell.t === 'n') {
+        const v = (typeof cell.v === 'number' && isFinite(cell.v)) ? cell.v : 0;
+        L.push('<c r="' + ref + '"' + sAttr + '><v>' + v + '</v></c>');
+      } else {
+        L.push('<c r="' + ref + '" t="inlineStr"' + sAttr + '><is><t xml:space="preserve">' + _xmlEsc(cell.v) + '</t></is></c>');
+      }
+    });
+    L.push('</row>');
+  });
+  L.push('</sheetData>');
+  if (opts.merges && opts.merges.length) {
+    L.push('<mergeCells count="' + opts.merges.length + '">');
+    for (const m of opts.merges) L.push('<mergeCell ref="' + m + '"/>');
+    L.push('</mergeCells>');
+  }
+  L.push('</worksheet>');
+  return L.join('');
+}
+function _buildZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const u32 = (arr, v) => { arr.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF); };
+  const u16 = (arr, v) => { arr.push(v & 0xFF, (v >>> 8) & 0xFF); };
+
+  for (const f of files) {
+    const nameBytes = _utf8(f.name);
+    const crc = _crc32(f.data);
+    const size = f.data.length;
+
+    const lh = [];
+    u32(lh, 0x04034b50);
+    u16(lh, 20);
+    u16(lh, 0x0800);
+    u16(lh, 0);
+    u16(lh, 0); u16(lh, 0);
+    u32(lh, crc);
+    u32(lh, size); u32(lh, size);
+    u16(lh, nameBytes.length);
+    u16(lh, 0);
+    const lhBytes = new Uint8Array(lh);
+    chunks.push(lhBytes, nameBytes, f.data);
+
+    const ch = [];
+    u32(ch, 0x02014b50);
+    u16(ch, 20); u16(ch, 20);
+    u16(ch, 0x0800);
+    u16(ch, 0);
+    u16(ch, 0); u16(ch, 0);
+    u32(ch, crc);
+    u32(ch, size); u32(ch, size);
+    u16(ch, nameBytes.length);
+    u16(ch, 0); u16(ch, 0);
+    u16(ch, 0); u16(ch, 0);
+    u32(ch, 0);
+    u32(ch, offset);
+    central.push({ header: new Uint8Array(ch), name: nameBytes });
+
+    offset += lhBytes.length + nameBytes.length + size;
+  }
+
+  const cdStart = offset;
+  for (const c of central) {
+    chunks.push(c.header, c.name);
+    offset += c.header.length + c.name.length;
+  }
+  const cdSize = offset - cdStart;
+
+  const eocd = [];
+  u32(eocd, 0x06054b50);
+  u16(eocd, 0); u16(eocd, 0);
+  u16(eocd, central.length); u16(eocd, central.length);
+  u32(eocd, cdSize);
+  u32(eocd, cdStart);
+  u16(eocd, 0);
+  chunks.push(new Uint8Array(eocd));
+
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const c of chunks) { out.set(c, p); p += c.length; }
+  return out;
+}
+/**
+ * 生成 XLSX Blob
+ * @param {string} sheetName 工作表名（≤31 字符，不能含 : \ / ? * [ ]）
+ * @param {Array<Array<{v:any, t:'s'|'n', s?:number}>>} rows 二维行
+ * @param {{merges?: string[], cols?: {min:number,max:number,width:number}[]}} [opts]
+ */
+function buildXlsxBlob(sheetName, rows, opts) {
+  opts = opts || {};
+  const files = [];
+
+  files.push({ name: '[Content_Types].xml', data: _utf8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '</Types>'
+  )});
+
+  files.push({ name: '_rels/.rels', data: _utf8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    '</Relationships>'
+  )});
+
+  files.push({ name: 'xl/workbook.xml', data: _utf8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheets><sheet name="' + _xmlEsc(sheetName.slice(0, 31)) + '" sheetId="1" r:id="rId1"/></sheets>' +
+    '</workbook>'
+  )});
+
+  files.push({ name: 'xl/_rels/workbook.xml.rels', data: _utf8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+    '</Relationships>'
+  )});
+
+  files.push({ name: 'xl/styles.xml', data: _utf8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<fonts count="2">' +
+      '<font><sz val="11"/><color theme="1"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/></font>' +
+    '</fonts>' +
+    '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+    '<borders count="1"><border/></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="2">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+    '</cellXfs>' +
+    '</styleSheet>'
+  )});
+
+  files.push({ name: 'xl/worksheets/sheet1.xml', data: _utf8(_buildSheetXml(rows, opts)) });
+
+  const zipBytes = _buildZip(files);
+  return new Blob([zipBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
 /* ==================== UI 辅助 ==================== */
 function getCheckedValues(selector) { const el = $(selector); if (!el) return []; return Array.from(el.querySelectorAll('.chip.on')).map(ch => ch.dataset.val); }
 function ensureChipContainer(id) {
@@ -361,7 +531,7 @@ function buildAutoMap(headers, def) { const out = {}; for (const k in def) out[k
 
 /* ==================== 文件导入 ==================== */
 async function handleFile(file) {
-  if (typeof XlsxParser === 'undefined') { alert('解析器未加载：请确认 lib/xlsx.js 存在，且 index.html 里 <script src="lib/xlsx.js"></script> 位于所有 dashboard-*.js 之前。'); return; }
+  if (typeof XlsxParser === 'undefined') { alert('解析器未加载：请确认 lib/xlsx.js 存在。'); return; }
   S.fileName = file.name;
   const impSum = $('#importSummary'); if (impSum) impSum.innerHTML = '';
   setProgress(1, '准备读取…');
@@ -409,7 +579,6 @@ async function handleFile(file) {
     alert('解析失败：' + err.message);
   }
 }
-
 function parseCSV(text) {
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const rows = []; let cur = [], field = '', inQ = false;
@@ -484,7 +653,6 @@ function parseRoster() {
     }
     S.roster.push(emp);
   }
-
   try {
     const memo = JSON.parse(localStorage.getItem('creator_roster_memo') || '{}');
     if (memo.resign) for (const e of S.roster) if (memo.resign[e.name]) e.resignDate = memo.resign[e.name];
@@ -506,7 +674,6 @@ function bizByL1L2(l1, l2, defaultBiz) {
   if (defaultBiz === '买手合作') return { biz: '买手合作', l1: '买手合作', l2: '其他' };
   return { biz: '博主合作', l1: '博主合作', l2: '博主其他' };
 }
-
 function normPeriod(p) {
   const s = String(p == null ? '' : p).trim();
   if (!s) return '';
@@ -1140,7 +1307,6 @@ function darkenColor(hex, factor) {
 
 /* ====================================================================
    时段量预测 · 核心算法
-   博主合作：25 日 / 28 日单独统计时段占比
    ==================================================================== */
 function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const latest = refDate || S.latestDate;
@@ -1258,7 +1424,6 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
       s30Groups[type][p].push(s.num / s.den);
     }
 
-    // ✅ 博主合作 25/28 特殊日分组
     if (biz === '博主合作') {
       const dom = parseInt(d.date.slice(8, 10), 10);
       if (dom === 25 || dom === 28) {
@@ -1366,7 +1531,6 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
     let share, s30Rate, typeLabel, specialKind = null;
     let usedSpecial = false;
 
-    // ✅ 博主合作 25/28 优先使用特殊日模板
     if (biz === '博主合作' && stats.specialDays) {
       const dom = parseInt(date.slice(8, 10), 10);
       const isSpecialDom = (dom === 25 || dom === 28);
@@ -1383,7 +1547,6 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
         }
       }
     }
-
     if (!usedSpecial) {
       share = useWeekend ? stats.weekend : stats.weekday;
       s30Rate = useWeekend ? stats.weekendS30 : stats.weekdayS30;
@@ -1404,7 +1567,7 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   lines.push('# ' + biz + ' · 时段量预测');
   lines.push('');
   lines.push('- 业务线口径：**按一级打点识别**（' + biz + '）');
-  lines.push('- 时段范围：**9-23 时**（动态检测，共 ' + ((forecast.periods && forecast.periods.length) || 0) + ' 个）');
+  lines.push('- 时段范围：**9-23 时**（动态检测）');
   lines.push('- 样本周期：' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '（近 ' + sampleWeeks + ' 周）');
   lines.push('- 计算维度：CASE 总量');
   lines.push('- 样本天数：工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天');
@@ -1493,10 +1656,7 @@ function formatForecastAiContext(ctx) {
     L.push('【⚠️ 业务特殊日（仅博主合作）：每月 25 日 / 28 日为集中进线日】');
     for (const k of ['25', '28']) {
       const sd = ctx.specialDays[k];
-      if (!sd) {
-        L.push('  ' + k + ' 日：样本不足，未启用特殊模板。');
-        continue;
-      }
+      if (!sd) { L.push('  ' + k + ' 日：样本不足，未启用特殊模板。'); continue; }
       L.push('  ' + k + ' 日：样本 ' + sd.sampleCount + ' 天（' + (sd.dates.join('、') || '—') + '），时段占比如下：');
       L.push('    时段 | ' + ctx.periodList.join(' | '));
       L.push('    占比 | ' + ctx.periodList.map(p => sd.share[p] || '—').join(' | '));

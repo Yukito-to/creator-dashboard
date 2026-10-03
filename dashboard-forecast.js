@@ -124,7 +124,6 @@ function collectDailyTotals() {
   const grid = $('#fcDailyGrid');
   const totals = {};
   if (!grid) return totals;
-
   grid.querySelectorAll('input[type=number]').forEach(inp => {
     const d = inp.dataset.date;
     const v = parseFloat(inp.value);
@@ -177,11 +176,9 @@ function renderForecastResult() {
 
   if (!stats.dailyStats || stats.dailyStats.length === 0) {
     const detected = (diag.periodsDetected && diag.periodsDetected.length)
-      ? diag.periodsDetected.join('、')
-      : '（无）';
+      ? diag.periodsDetected.join('、') : '（无）';
     const used = (diag.periodsUsed && diag.periodsUsed.length)
-      ? diag.periodsUsed.join('、')
-      : '（无）';
+      ? diag.periodsUsed.join('、') : '（无）';
     el.innerHTML =
       '<div style="padding:14px 16px;background:#FFF7E6;border-radius:10px;border-left:3px solid #E8A33E;line-height:1.9;font-size:13px">' +
       '<div style="font-weight:700;color:#B36A00;margin-bottom:6px">⚠ 未能从历史数据中提取 9-23 时段占比</div>' +
@@ -271,6 +268,91 @@ function renderForecastResult() {
   }
 }
 
+/* ==================== 导出 XLSX ==================== */
+function exportForecastXlsx() {
+  const bizEl = $('#fcBiz');
+  const biz = (bizEl && bizEl.value) || '买手合作';
+  const startEl = $('#fcStartDate');
+  const daysEl = $('#fcDays');
+  const weeksEl = $('#fcSampleWeeks');
+
+  const startDate = startEl ? startEl.value : '';
+  const days = daysEl ? parseInt(daysEl.value, 10) : 7;
+  const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
+
+  if (!startDate) { toast('❌ 请先选择起始日期'); return; }
+
+  const dailyTotals = collectDailyTotals();
+  if (Object.keys(dailyTotals).length === 0) { toast('❌ 请先输入每日总量'); return; }
+
+  const holidays = S.forecastHolidays || new Set();
+  const forecast = generateForecast(biz, 'caseVolume', sampleWeeks, startDate, days, dailyTotals, holidays);
+  if (!forecast) { toast('❌ 无法生成预测数据'); return; }
+  if (!forecast.stats.dailyStats || forecast.stats.dailyStats.length === 0) {
+    toast('❌ 历史数据中没有可用的时段占比');
+    return;
+  }
+
+  const { results, periods } = forecast;
+  const periodList = (periods && periods.length) ? periods : PREDICT_PERIODS;
+
+  // 构造二维行：第 1、2 行为双行表头
+  const rows = [];
+
+  const header1 = [{ v: '时段', t: 's', s: 1 }];
+  const header2 = [{ v: '', t: 's', s: 1 }];
+  for (const r of results) {
+    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
+    header1.push({ v: r.date.slice(5) + ' 周' + WEEKDAY_CN[wd], t: 's', s: 1 });
+    header2.push({ v: r.typeLabel || '', t: 's', s: 1 });
+  }
+  header1.push({ v: '合计', t: 's', s: 1 });
+  header2.push({ v: '', t: 's', s: 1 });
+  rows.push(header1, header2);
+
+  for (const p of periodList) {
+    const row = [{ v: p + '时', t: 's', s: 0 }];
+    let sum = 0;
+    for (const r of results) {
+      const v = r.periods[p] || 0;
+      sum += v;
+      row.push({ v: Math.round(v), t: 'n', s: 0 });
+    }
+    row.push({ v: Math.round(sum), t: 'n', s: 1 });
+    rows.push(row);
+  }
+
+  const totalRow = [{ v: '总量', t: 's', s: 1 }];
+  let grand = 0;
+  for (const r of results) {
+    totalRow.push({ v: Math.round(r.total), t: 'n', s: 0 });
+    grand += r.total;
+  }
+  totalRow.push({ v: Math.round(grand), t: 'n', s: 1 });
+  rows.push(totalRow);
+
+  const lastCol = results.length + 2;
+  const merges = ['A1:A2', _colLetter(lastCol) + '1:' + _colLetter(lastCol) + '2'];
+
+  const cols = [{ min: 1, max: 1, width: 10 }];
+  for (let i = 0; i < results.length; i++) cols.push({ min: i + 2, max: i + 2, width: 13 });
+  cols.push({ min: lastCol, max: lastCol, width: 12 });
+
+  const sheetName = '时段预测-' + biz.replace(/[\\\/\?\*\[\]:]/g, '');
+  const blob = buildXlsxBlob(sheetName, rows, { merges, cols });
+
+  const fname = '时段预测-' + biz + '-' + startDate + '-' + days + '天.xlsx';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('⬇ 已导出 ' + fname);
+}
+
 /* ==================== AI 深度分析 ==================== */
 async function runForecastAiAnalysis() {
   const outEl = $('#fcAiOut');
@@ -293,7 +375,6 @@ async function runForecastAiAnalysis() {
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
   const weeksEl = $('#fcSampleWeeks');
-
   const startDate = startEl ? startEl.value : '';
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
   const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
@@ -387,23 +468,16 @@ function copyForecastMd() {
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
   const weeksEl = $('#fcSampleWeeks');
-
   const startDate = startEl ? startEl.value : '';
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
   const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
 
   const dailyTotals = collectDailyTotals();
-  if (Object.keys(dailyTotals).length === 0) {
-    toast('❌ 请先输入每日总量');
-    return;
-  }
+  if (Object.keys(dailyTotals).length === 0) { toast('❌ 请先输入每日总量'); return; }
 
   const holidays = S.forecastHolidays || new Set();
   const forecast = generateForecast(biz, 'caseVolume', sampleWeeks, startDate, days, dailyTotals, holidays);
-  if (!forecast) {
-    toast('❌ 无法生成预测数据');
-    return;
-  }
+  if (!forecast) { toast('❌ 无法生成预测数据'); return; }
 
   const md = forecastToMarkdown(biz, 'caseVolume', sampleWeeks, forecast);
   navigator.clipboard.writeText(md).then(() => {
@@ -424,9 +498,7 @@ function copyForecastMd() {
 function clearForecastInputs() {
   const bizEl = $('#fcBiz');
   const biz = (bizEl && bizEl.value) || '买手合作';
-  if (S.forecastInputs && S.forecastInputs[biz]) {
-    S.forecastInputs[biz] = {};
-  }
+  if (S.forecastInputs && S.forecastInputs[biz]) S.forecastInputs[biz] = {};
   if (S.forecastHolidays) S.forecastHolidays.clear();
   if (S.forecastWorkdays) S.forecastWorkdays.clear();
   try {
@@ -440,8 +512,8 @@ function clearForecastInputs() {
   toast('已清空输入与手动覆盖的节假日');
 }
 
-/* ==================== 启动时加载节假日数据 ==================== */
-(function bootstrapHoliday() {
+/* ==================== 启动引导：加载节假日 + 注入 XLSX 按钮 ==================== */
+(function bootstrapForecast() {
   const run = () => {
     try {
       if (!S.forecastHolidays) S.forecastHolidays = new Set();
@@ -456,6 +528,17 @@ function clearForecastInputs() {
       initHolidayData().catch(err => {
         console.warn('[节假日API] 初始化失败：', err);
       });
+    }
+
+    // 动态注入「导出 XLSX」按钮（在「清空输入」之后）
+    const clearBtn = document.getElementById('btnFcClear');
+    if (clearBtn && clearBtn.parentNode && !document.getElementById('btnFcXlsx')) {
+      const xlsxBtn = document.createElement('button');
+      xlsxBtn.id = 'btnFcXlsx';
+      xlsxBtn.className = 'btn sm';
+      xlsxBtn.textContent = '📥 导出 XLSX';
+      xlsxBtn.addEventListener('click', exportForecastXlsx);
+      clearBtn.parentNode.appendChild(xlsxBtn);
     }
   };
   if (document.readyState === 'loading') {
