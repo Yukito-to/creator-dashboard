@@ -51,7 +51,19 @@ const MAP_DEF = {
 const FIELD_LABEL = { name:'姓名', date:'日期', period:'时段', l1:'一级打点', l2:'二级打点', volume:'CASE处理量（人工服务量）', s30Num:'30S接起率-分子', s30Den:'30S接起率-分母', aht:'CASE处理时长（分钟）', solved:'已解决量', solveEval:'解决评价量', satisfy:'满意量', satisfyEval:'满意评价量', escalate:'升级二线工单数', repeat72:'全渠道72H重复进线量（T-3）', fcrDen:'全渠道72HFCR分母（T-3）', online:'在线时长', after:'后处理时长', official:'公务时长', train:'培训时长', mentor:'带教时长', rest:'小休时长（含busy）', meal:'就餐时长', total:'总登录时长（不含就餐）', biz:'业务线', id:'质检对象id', pass:'是否合格' };
 const MAP_TITLE = { buyer:'买手员工数据', blogger:'博主员工数据', inspectionBuyer:'买手员工质检', inspectionBlogger:'博主员工质检', worktime:'工时', business:'业务线映射', business2:'二级打点映射', buyerSla:'买手员工SLA', bloggerSla:'博主员工SLA' };
 const DATE_BG = ['#E8EDF3','#F3EFE2','#E4EFE6','#F5E6EC','#E4EAF5','#F5F0DF','#ECE6F5','#E0EFEC','#F5E4E2','#F0E6F0'];
-
+/* ==================== 时段预测专用常量 ==================== */
+/* 预测时段范围：9-23 时（含），共 15 个时段 */
+const PREDICT_PERIOD_MIN = 9;
+const PREDICT_PERIOD_MAX = 23;
+const PREDICT_PERIODS = (function() {
+  const arr = [];
+  for (let h = PREDICT_PERIOD_MIN; h <= PREDICT_PERIOD_MAX; h++) arr.push(String(h));
+  return arr;
+})();
+function isPredictPeriod(p) {
+  const n = parseInt(p, 10);
+  return isFinite(n) && n >= PREDICT_PERIOD_MIN && n <= PREDICT_PERIOD_MAX;
+}
 const BUYER_AHT2_ORDER = [['买手带货','业务介绍'],['买手带货','准入门槛'],['买手带货','买手撮合'],['买手带货','商家分销'],['买手带货','买手选品'],['买手带货','笔记带货'],['买手带货','橱窗带货'],['买手带货','蓝链带货'],['买手带货','直播带货'],['买手带货','营销运营'],['买手带货','直播间审核'],['买手带货','笔记审核'],['买手带货','账号违规'],['买手带货','买手拿样'],['买手带货','买手成长'],['买手带货','商家分销结算'],['买手带货','经营数据'],['买手带货','买手活动'],['买手带货','合作纠纷'],['买手带货','买手财务'],['买手合作','其他']];
 const BLOGGER_AHT2_ORDER = [['博主合作','蒲公英准入/准出'],['博主合作','蒲公英合作产品'],['博主合作','财务管理'],['博主合作','蒲公英审核'],['博主合作','健康等级'],['博主合作','蒲公英数据'],['博主合作','蒲公英合作纠纷'],['博主合作','蒲公英基础功能'],['蒲公英代理商','代理商入驻/审核'],['蒲公英代理商','蒲公英代理商保证金'],['蒲公英代理商','核实/解绑蒲公英代理商'],['蒲公英代理商','蒲公英代理商登录'],['蒲公英代理商','蒲公英代理商功能操作'],['蒲公英代理商','蒲公英代理商管理规范咨询'],['蒲公英代理商','蒲公英代理商策略'],['MCN机构（新）','MCN商业入驻'],['MCN机构（新）','MCN机构保证金'],['MCN机构（新）','MCN生态'],['博主合作','其他'],['博主合作','博主其他']];
 
@@ -939,19 +951,29 @@ function darkenColor(hex, factor) {
    ==================================================================== */
 
 /* 计算「日期类型 × 时段」平均占比 + 每时段 30S 接起率 */
+/* 计算「日期类型 × 时段」平均占比 + 每时段 30S 接起率
+   【口径说明】
+   - 业务线：只取 r.biz === biz 的记录。r.biz 来自「一级打点」映射
+             （bizByL1 → businessMap[l1] → 买手合作 / 博主合作）
+   - 时段：只保留 9-23 时（共 15 个时段），其他时段一律剔除
+   - 占比：用中位数（抗异常值） */
 function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const latest = refDate || S.latestDate;
   if (!latest) return null;
   const startDate = dateAdd(latest, -(sampleWeeks * 7 - 1));
 
+  /* 按 日期 → { periods, s30 } 聚合 */
   const dayMap = new Map();
   for (const r of S.records) {
+    /* ★ 一级打点业务线过滤 */
     if (r.biz !== biz) continue;
     if (r.date < startDate || r.date > latest) continue;
+    const p = normPeriod(r.period) || '—';
+    /* ★ 只保留 9-23 时 */
+    if (!isPredictPeriod(p)) continue;
     if (!dayMap.has(r.date)) dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {} });
     const d = dayMap.get(r.date);
     const v = num(r[metricKey]) || 0;
-    const p = normPeriod(r.period) || '—';
     d.periods[p] = (d.periods[p] || 0) + v;
     d.total += v;
     if (!d.s30[p]) d.s30[p] = { num: 0, den: 0 };
@@ -1019,8 +1041,17 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     return out;
   };
 
-  const weekday = normalize(weekdayRaw);
-  const weekendFinal = Object.keys(weekendRaw).length > 0 ? normalize(weekendRaw) : weekday;
+  /* ★ 强制补全 9-23 全部 15 个时段（即使某时段无历史数据也占位为 0） */
+  const fillPeriods = (obj) => {
+    const out = {};
+    for (const p of PREDICT_PERIODS) out[p] = obj[p] || 0;
+    return out;
+  };
+
+  const weekday = normalize(fillPeriods(weekdayRaw));
+  const weekendFinal = Object.keys(weekendRaw).length > 0
+    ? normalize(fillPeriods(weekendRaw))
+    : weekday;
 
   const weekdayS30 = avg(s30Groups.weekday);
   const weekendS30 = avg(s30Groups.weekend);
@@ -1061,7 +1092,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   };
 }
 
-/* 生成时段预测 */
+/* 生成时段预测（固定输出 9-23 共 15 个时段） */
 function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays) {
   const stats = calcPeriodStats(biz, metricKey, sampleWeeks);
   if (!stats) return null;
@@ -1079,13 +1110,16 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
 
     const total = num(dailyTotals[date]);
     const row = { date, isWeekend, isHoliday, total, periods: {}, s30Rate };
-    for (const p in share) row.periods[p] = total * share[p];
+    /* ★ 严格按 9-23 输出 15 个时段，未命中的填 0 */
+    for (const p of PREDICT_PERIODS) {
+      row.periods[p] = total * (share[p] || 0);
+    }
     results.push(row);
   }
   return { stats, results };
 }
 
-/* 把预测结果转成 Markdown */
+/* 把预测结果转成 Markdown（仅 9-23 时段） */
 function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   if (!forecast) return '';
   const { stats, results } = forecast;
@@ -1093,18 +1127,15 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   const lines = [];
   lines.push('# ' + biz + ' · 时段量预测');
   lines.push('');
+  lines.push('- 业务线口径：**按一级打点识别**（' + biz + '）');
+  lines.push('- 时段范围：**9-23 时**（共 15 个时段）');
   lines.push('- 样本周期：' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '（近 ' + sampleWeeks + ' 周）');
   lines.push('- 计算维度：' + metricLbl);
   lines.push('- 样本天数：工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天');
   lines.push('');
 
-  const allPeriods = new Set();
-  for (const r of results) for (const p in r.periods) allPeriods.add(p);
-  const periodList = Array.from(allPeriods).sort((a, b) => {
-    const ai = parseInt(a, 10), bi = parseInt(b, 10);
-    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
-    return String(a).localeCompare(String(b));
-  });
+  /* ★ 固定 9-23 时段 */
+  const periodList = PREDICT_PERIODS.slice();
 
   lines.push('| 时段 | ' + results.map(r => {
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
@@ -1125,18 +1156,12 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   return lines.join('\n');
 }
 
-/* 构建 AI 分析用的预测上下文 */
+/* 构建 AI 分析用的预测上下文（仅 9-23 时段） */
 function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays, forecast) {
   const { stats, results } = forecast;
 
-  const allPeriods = new Set();
-  for (const p in stats.weekday) allPeriods.add(p);
-  for (const p in stats.weekend) allPeriods.add(p);
-  const periodList = Array.from(allPeriods).sort((a, b) => {
-    const ai = parseInt(a, 10), bi = parseInt(b, 10);
-    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
-    return String(a).localeCompare(String(b));
-  });
+  /* ★ 固定 9-23 时段 */
+  const periodList = PREDICT_PERIODS.slice();
 
   const historyDetail = stats.dailyStats.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(d => {
     const row = {
@@ -1161,12 +1186,12 @@ function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, da
   });
 
   const avgShare = {
-    weekday: Object.fromEntries(Object.entries(stats.weekday).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
-    weekend: Object.fromEntries(Object.entries(stats.weekend).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+    weekday: Object.fromEntries(periodList.map(p => [p, ((stats.weekday[p] || 0) * 100).toFixed(2) + '%'])),
+    weekend: Object.fromEntries(periodList.map(p => [p, ((stats.weekend[p] || 0) * 100).toFixed(2) + '%'])),
   };
   const avgS30 = {
-    weekday: Object.fromEntries(Object.entries(stats.weekdayS30).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
-    weekend: Object.fromEntries(Object.entries(stats.weekendS30).map(([p, v]) => [p, (v * 100).toFixed(2) + '%'])),
+    weekday: Object.fromEntries(periodList.map(p => [p, stats.weekdayS30[p] != null ? (stats.weekdayS30[p] * 100).toFixed(2) + '%' : '—'])),
+    weekend: Object.fromEntries(periodList.map(p => [p, stats.weekendS30[p] != null ? (stats.weekendS30[p] * 100).toFixed(2) + '%' : '—'])),
   };
 
   const forecastRows = results.map(r => {
