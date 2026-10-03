@@ -28,6 +28,7 @@ function renderForecastConfig() {
     const date = dateAdd(startDate, i);
     if (!date) continue;
     const wd = new Date(date + 'T00:00:00Z').getUTCDay();
+    const dom = parseInt(date.slice(8, 10), 10);
 
     let val = S.forecastInputs[biz][date];
     let isAuto = false;
@@ -36,15 +37,22 @@ function renderForecastConfig() {
       else { val = ''; }
     }
 
-    const typeLabel = dateTypeLabel(date);
-    const checked = shouldUseWeekendPattern(date) ? ' checked' : '';
+    const cls = classifyDate(date);
+    const userHoliday = S.forecastHolidays.has(date);
+    const isBloggerSpecial = (biz === '博主合作')
+      && (dom === 25 || dom === 28)
+      && cls !== 'holiday'
+      && !userHoliday;
+
+    const typeLabel = isBloggerSpecial ? ('博主' + dom + '日') : dateTypeLabel(date);
     const typeColor = typeLabel === '节假日' ? '#E8A33E'
                     : typeLabel === '调休上班' ? '#C75C5C'
                     : typeLabel === '周末' ? '#C4B0CE'
+                    : typeLabel.indexOf('博主') === 0 ? '#C75C5C'
                     : typeLabel.indexOf('自定义') === 0 ? '#7B8FBF'
                     : '#77778A';
 
-    const isWeekendRow = shouldUseWeekendPattern(date);
+    const isWeekendRow = shouldUseWeekendPattern(date) || isBloggerSpecial;
     const rowClass = isWeekendRow ? 'fc-daily-row fc-weekend' : 'fc-daily-row';
     const autoTag = isAuto ? '<span class="fc-auto-tag">预测量</span>' : '';
 
@@ -56,7 +64,7 @@ function renderForecastConfig() {
       '</div>' +
       '<input type="number" inputmode="decimal" step="1" min="0" value="' + esc(val) + '" data-date="' + date + '" placeholder="输入总量">' +
       '<label class="fc-holiday" title="勾选 = 按周末/节假日模板计算；取消 = 按工作日模板计算">' +
-        '<input type="checkbox" data-date="' + date + '"' + checked + '> 按休日算' +
+        '<input type="checkbox" data-date="' + date + '"' + (shouldUseWeekendPattern(date) ? ' checked' : '') + '> 按休日算' +
       '</label>' +
     '</div>';
   }
@@ -65,9 +73,18 @@ function renderForecastConfig() {
 
   const tipEl = $('#fcAutoTip');
   if (tipEl) {
-    if (hasAutoData) {
+    const specialTip = (biz === '博主合作')
+      ? '🎯 博主合作专属：每月 25 日、28 日自动使用该业务单独统计的历史模板（节假日除外）。'
+      : '';
+    if (hasAutoData && specialTip) {
+      tipEl.style.display = 'block';
+      tipEl.innerHTML = '💡 已自动填充导入的「预测量」数据（可覆盖）。<br><span style="color:#C75C5C">' + specialTip + '</span>';
+    } else if (hasAutoData) {
       tipEl.style.display = 'block';
       tipEl.innerHTML = '💡 已自动填充导入的「预测量」数据（可覆盖）；节假日/周末已按中国法定节假日自动识别，可手动勾选/取消覆盖。';
+    } else if (specialTip) {
+      tipEl.style.display = 'block';
+      tipEl.innerHTML = '<span style="color:#C75C5C">' + specialTip + '</span>';
     } else {
       tipEl.style.display = 'none';
     }
@@ -181,7 +198,7 @@ function renderForecastResult() {
     return;
   }
 
-  /* ---- 双行表头：第一行=日期，第二行=类型；全部居中 ---- */
+  /* 双行表头 */
   let thead = '<tr>';
   thead += '<th rowspan="2" style="vertical-align:middle;text-align:center;min-width:70px">时段</th>';
   for (const r of results) {
@@ -197,13 +214,13 @@ function renderForecastResult() {
     const color = label === '节假日' ? '#E8A33E'
                 : label === '调休上班' ? '#C75C5C'
                 : label === '周末' ? '#C4B0CE'
+                : label.indexOf('博主') === 0 ? '#C75C5C'
                 : label.indexOf('自定义') === 0 ? '#7B8FBF'
                 : '#77778A';
     thead += '<th style="text-align:center;vertical-align:middle;color:' + color + ';font-weight:500;font-size:11px;padding-top:4px;padding-bottom:5px">' + label + '</th>';
   }
   thead += '</tr>';
 
-  /* ---- 表体：每行一个时段 ---- */
   let tbody = '';
   for (const p of periodList) {
     tbody += '<tr>' +
@@ -218,7 +235,6 @@ function renderForecastResult() {
     tbody += '</tr>';
   }
 
-  /* ---- 底部总量行 ---- */
   tbody += '<tr style="background:#F4F3EF;font-weight:600">' +
     '<td style="text-align:center;position:sticky;left:0;background:#F4F3EF;box-shadow:inset -1px 0 0 #E7E5DE">总量</td>';
   for (const r of results) {
@@ -228,13 +244,26 @@ function renderForecastResult() {
 
   el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table></div>';
 
-  /* ---- 备注 ---- */
   if (notesEl) {
     const weightTag = stats.usedRowCount
       ? '（⚠ 未检测到「CASE处理量」，已改用明细行数作为权重）'
       : '（按 CASE 处理量加权）';
     let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + ' ' + weightTag + '。</div>';
     noteHtml += '<div style="color:#77778A;font-size:11.5px">🗓 节假日识别：' + _cnHolidayVersion + '；时段仅统计 9-23；勾选/取消「按休日算」可手动覆盖。</div>';
+
+    if (biz === '博主合作' && stats.specialDays) {
+      const s25 = stats.specialDays['25'];
+      const s28 = stats.specialDays['28'];
+      const tips = [];
+      if (s25) tips.push('25 日（' + s25.sampleCount + ' 天样本）');
+      if (s28) tips.push('28 日（' + s28.sampleCount + ' 天样本）');
+      if (tips.length) {
+        noteHtml += '<div style="color:#C75C5C;margin-top:4px">🎯 <b>博主特殊日模板：</b>' + tips.join('、') + ' 已单独统计历史时段占比。</div>';
+      } else {
+        noteHtml += '<div style="color:#77778A;margin-top:4px">🎯 <b>博主特殊日：</b>25/28 日暂无足够历史样本，本期按常规模板。</div>';
+      }
+    }
+
     if (stats.abnormalDays && stats.abnormalDays.length) {
       noteHtml += '<div style="color:#C98383;margin-top:4px">⚠ <b>疑似异常天：</b>' + stats.abnormalDays.map(d => d.date + '（偏差' + d.totalDevPct + '%）').join('、') + '。</div>';
     }
@@ -295,6 +324,7 @@ async function runForecastAiAnalysis() {
   const system = [
     '你是一个资深的客服中心排班与预测分析师。',
     '请根据给定的历史时段占比、30S接起率、以及未来预测数据，输出一份专业的时段预测分析报告。',
+    '如数据中出现「博主特殊日（25/28 日）」相关信息，请结合该特殊日的历史占比单独评估风险并给出建议。',
     '',
     '【分析要求】',
     '1. 整体评估：评估未来几天的预测总量是否合理，与历史趋势是否一致。',
@@ -413,7 +443,6 @@ function clearForecastInputs() {
 /* ==================== 启动时加载节假日数据 ==================== */
 (function bootstrapHoliday() {
   const run = () => {
-    // 先从 localStorage 恢复用户手动覆盖
     try {
       if (!S.forecastHolidays) S.forecastHolidays = new Set();
       if (!S.forecastWorkdays) S.forecastWorkdays = new Set();

@@ -1,6 +1,6 @@
 /* ============================================================
    创作者数据分析 · 核心层
-   （常量 / 状态 / 工具 / 文件解析 / 数据聚合 / 目标读取 / 时段预测算法）
+   （常量 / 状态 / 工具 / 文件解析 / 数据聚合 / 目标读取 / 时段预测算法 / 节假日API）
    ============================================================ */
 'use strict';
 
@@ -76,62 +76,8 @@ const BLOGGER_AHT2_ORDER = [['博主合作','蒲公英准入/准出'],['博主�
 const normAHT2 = s => String(s == null ? '' : s).replace(/\uFF08/g,'(').replace(/\uFF09/g,')').replace(/\uFF0F/g,'/').replace(/\u3000/g,'').replace(/\s+/g,'').toLowerCase();
 const aht2Key = (l1, l2) => normAHT2(l1) + '|' + normAHT2(l2);
 
-/* ==================== 全局状态 ==================== */
-const S = {
-  fileName:'', sheets:{}, headers:{}, mapping:{},
-  roster:[], records:[], wtRecords:[], inspections:[],
-  slaBuyer:[], slaBlogger:[],
-  businessMap:{}, business2Map:{},
-  shiftMap:{}, schedule:{}, scheduleDates:[],
-  month:'', latestDate:'', latestWK:0, hidden:false,
-  attOverride:{}, personSel:new Set(),
-  teamSel:{ group:new Set(), batch:new Set(), category:new Set() },
-  s30Dates:new Set(), s30ShowSummary:true,
-  expandedRows:new Set(),
-  forecastBuyer:{}, forecastBlogger:{},
-  volumeForecast:{},
-  forecastInputs:{},
-  forecastHolidays:new Set(),
-  forecastWorkdays:new Set()
-};
-
-/* ==================== 格式化工具 ==================== */
-const num = v => { if (v===''||v==null) return 0; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
-const fmtVal = (n,m) => { if (n==null||!isFinite(n)) return '—'; if (m.pct) return (n*100).toFixed(m.digits)+'%'; return n.toFixed(m.digits); };
-const fmtInt = v => (v==null||!isFinite(v)) ? '—' : String(Math.round(v));
-const pct2 = v => (v==null||!isFinite(v)) ? '—' : (v*100).toFixed(2)+'%';
-const num2 = (v,d) => (v==null||!isFinite(v)) ? '—' : v.toFixed(d==null?2:d);
-const dArrow = d => (d==null||!isFinite(d)||Math.abs(d)<1e-9) ? '' : (d>0?'↑':'↓');
-const dStr = (d,dg) => (d==null||!isFinite(d)) ? '—' : (d>0?'+':'')+d.toFixed(dg==null?2:dg);
-const dPct = (d,dg) => (d==null||!isFinite(d)) ? '—' : (d>0?'+':'')+(d*100).toFixed(dg==null?2:dg)+'%';
-
-function isPassValue(v) { const s = String(v == null ? '' : v).trim(); if (!s) return false; if (/不合格|不通过|不达标|未通过|fail/i.test(s)) return false; if (/^(n|no|0|false|否)$/i.test(s)) return false; return true; }
-function bizToSrc(biz) { return biz === '博主合作' ? 'blogger' : 'buyer'; }
-
-/* ==================== 日期工具 ==================== */
-function parseDate(v) {
-  if (v === '' || v == null) return '';
-  if (v instanceof Date) return v.getFullYear()+'-'+pad2(v.getMonth()+1)+'-'+pad2(v.getDate());
-  if (typeof v === 'number') { const d = new Date(Date.UTC(1899,11,30) + Math.round(v*86400000)); return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate()); }
-  const s = String(v).trim();
-  let m = /^(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})/.exec(s);
-  if (m) return m[1]+'-'+pad2(m[2])+'-'+pad2(m[3]);
-  m = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/.exec(s);
-  if (m) return m[3]+'-'+pad2(m[1])+'-'+pad2(m[2]);
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
-  return '';
-}
-const monthOf = d => d ? d.slice(0,7) : '';
-const wkOf = d => { if (!d) return 0; const t = Date.parse(d + 'T00:00:00Z'); if (isNaN(t)) return 0; return WK_BASE_NUM + Math.floor(Math.floor((t - WK_BASE_UTC) / 86400000) / 7); };
-const dateAdd = (d, delta) => { const t = Date.parse(d + 'T00:00:00Z') + delta * 86400000; if (isNaN(t)) return ''; const x = new Date(t); return x.getUTCFullYear()+'-'+pad2(x.getUTCMonth()+1)+'-'+pad2(x.getUTCDate()); };
-const wkStartDate = wk => dateAdd(WK_BASE_DATE, (wk - WK_BASE_NUM) * 7);
-const wkEndDate   = wk => dateAdd(wkStartDate(wk), 6);
-const weekdayOf   = d => d ? WEEKDAY_CN[new Date(d + 'T00:00:00Z').getUTCDay()] : '';
-
 /* ====================================================================
-   中国法定节假日 · 动态加载（自动更新）
-   数据源：NateScarlet/holiday-cn（每日自动抓取国务院公告）
+   中国法定节假日 · 动态加载
    ==================================================================== */
 const CN_HOLIDAY_API_BASE = 'https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master';
 const CN_HOLIDAY_CACHE_KEY = 'creator_cn_holiday_cache';
@@ -221,7 +167,6 @@ async function initHolidayData() {
   }
 }
 
-/* 内置兜底表（API 不可用时使用） */
 const CN_HOLIDAY_FALLBACK = {
   '2025-01-01': 'holiday', '2025-01-26': 'workday',
   '2025-01-28': 'holiday', '2025-01-29': 'holiday', '2025-01-30': 'holiday',
@@ -294,6 +239,59 @@ function dateTypeLabel(date) {
   if (auto === 'weekend') return '周末';
   return '工作日';
 }
+
+/* ==================== 全局状态 ==================== */
+const S = {
+  fileName:'', sheets:{}, headers:{}, mapping:{},
+  roster:[], records:[], wtRecords:[], inspections:[],
+  slaBuyer:[], slaBlogger:[],
+  businessMap:{}, business2Map:{},
+  shiftMap:{}, schedule:{}, scheduleDates:[],
+  month:'', latestDate:'', latestWK:0, hidden:false,
+  attOverride:{}, personSel:new Set(),
+  teamSel:{ group:new Set(), batch:new Set(), category:new Set() },
+  s30Dates:new Set(), s30ShowSummary:true,
+  expandedRows:new Set(),
+  forecastBuyer:{}, forecastBlogger:{},
+  volumeForecast:{},
+  forecastInputs:{},
+  forecastHolidays:new Set(),
+  forecastWorkdays:new Set()
+};
+
+/* ==================== 格式化工具 ==================== */
+const num = v => { if (v===''||v==null) return 0; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
+const fmtVal = (n,m) => { if (n==null||!isFinite(n)) return '—'; if (m.pct) return (n*100).toFixed(m.digits)+'%'; return n.toFixed(m.digits); };
+const fmtInt = v => (v==null||!isFinite(v)) ? '—' : String(Math.round(v));
+const pct2 = v => (v==null||!isFinite(v)) ? '—' : (v*100).toFixed(2)+'%';
+const num2 = (v,d) => (v==null||!isFinite(v)) ? '—' : v.toFixed(d==null?2:d);
+const dArrow = d => (d==null||!isFinite(d)||Math.abs(d)<1e-9) ? '' : (d>0?'↑':'↓');
+const dStr = (d,dg) => (d==null||!isFinite(d)) ? '—' : (d>0?'+':'')+d.toFixed(dg==null?2:dg);
+const dPct = (d,dg) => (d==null||!isFinite(d)) ? '—' : (d>0?'+':'')+(d*100).toFixed(dg==null?2:dg)+'%';
+
+function isPassValue(v) { const s = String(v == null ? '' : v).trim(); if (!s) return false; if (/不合格|不通过|不达标|未通过|fail/i.test(s)) return false; if (/^(n|no|0|false|否)$/i.test(s)) return false; return true; }
+function bizToSrc(biz) { return biz === '博主合作' ? 'blogger' : 'buyer'; }
+
+/* ==================== 日期工具 ==================== */
+function parseDate(v) {
+  if (v === '' || v == null) return '';
+  if (v instanceof Date) return v.getFullYear()+'-'+pad2(v.getMonth()+1)+'-'+pad2(v.getDate());
+  if (typeof v === 'number') { const d = new Date(Date.UTC(1899,11,30) + Math.round(v*86400000)); return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate()); }
+  const s = String(v).trim();
+  let m = /^(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})/.exec(s);
+  if (m) return m[1]+'-'+pad2(m[2])+'-'+pad2(m[3]);
+  m = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/.exec(s);
+  if (m) return m[3]+'-'+pad2(m[1])+'-'+pad2(m[2]);
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+  return '';
+}
+const monthOf = d => d ? d.slice(0,7) : '';
+const wkOf = d => { if (!d) return 0; const t = Date.parse(d + 'T00:00:00Z'); if (isNaN(t)) return 0; return WK_BASE_NUM + Math.floor(Math.floor((t - WK_BASE_UTC) / 86400000) / 7); };
+const dateAdd = (d, delta) => { const t = Date.parse(d + 'T00:00:00Z') + delta * 86400000; if (isNaN(t)) return ''; const x = new Date(t); return x.getUTCFullYear()+'-'+pad2(x.getUTCMonth()+1)+'-'+pad2(x.getUTCDate()); };
+const wkStartDate = wk => dateAdd(WK_BASE_DATE, (wk - WK_BASE_NUM) * 7);
+const wkEndDate   = wk => dateAdd(wkStartDate(wk), 6);
+const weekdayOf   = d => d ? WEEKDAY_CN[new Date(d + 'T00:00:00Z').getUTCDay()] : '';
 
 /* ==================== UI 辅助 ==================== */
 function getCheckedValues(selector) { const el = $(selector); if (!el) return []; return Array.from(el.querySelectorAll('.chip.on')).map(ch => ch.dataset.val); }
@@ -1142,14 +1140,15 @@ function darkenColor(hex, factor) {
 
 /* ====================================================================
    时段量预测 · 核心算法
+   博主合作：25 日 / 28 日单独统计时段占比
    ==================================================================== */
 function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const latest = refDate || S.latestDate;
   if (!latest) return null;
   const startDate = dateAdd(latest, -(sampleWeeks * 7 - 1));
   const dayMap = new Map();
-  const periodSet = new Set();       // 只保留 9-23
-  const allPeriodsSet = new Set();   // 诊断用，记录所有检测到的时段
+  const periodSet = new Set();
+  const allPeriodsSet = new Set();
   let scanned = 0;
   let sumVolume = 0;
   let rowsWithPeriod = 0;
@@ -1165,8 +1164,6 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     if (!p) continue;
     rowsWithPeriod++;
     allPeriodsSet.add(p);
-
-    // ✅ 只统计 9-23 时段
     if (!isPredictPeriod(p)) continue;
     rowsInRange++;
 
@@ -1195,14 +1192,10 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const sortedPeriods = Array.from(periodSet).sort((a, b) => periodSortKey(a) - periodSortKey(b));
   const allPeriodsSorted = Array.from(allPeriodsSet).sort((a, b) => periodSortKey(a) - periodSortKey(b));
   const diagnostic = {
-    scanned,
-    matchedDays: dayMap.size,
-    periodsDetected: allPeriodsSorted,
-    periodsUsed: sortedPeriods,
+    scanned, matchedDays: dayMap.size,
+    periodsDetected: allPeriodsSorted, periodsUsed: sortedPeriods,
     sampleRange: { start: startDate, end: latest },
-    sumVolume,
-    rowsWithPeriod,
-    rowsInRange,
+    sumVolume, rowsWithPeriod, rowsInRange,
   };
 
   const emptyReturn = () => ({
@@ -1210,6 +1203,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     weekdayCount: 0, weekendCount: 0,
     sampleRange: { start: startDate, end: latest },
     dailyStats: [], abnormalDays: [], periods: [], diagnostic,
+    specialDays: { '25': null, '28': null },
   });
 
   if (!scanned) {
@@ -1237,14 +1231,21 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
 
   const groups = { weekday: {}, weekend: {} };
   const s30Groups = { weekday: {}, weekend: {} };
+  const specialDayGroups = {
+    '25': { shares: {}, s30: {}, count: 0, dates: [] },
+    '28': { shares: {}, s30: {}, count: 0, dates: [] },
+  };
+
   let wdCount = 0, weCount = 0;
   const dailyStats = [];
+
   for (const d of dayMap.values()) {
     if (d.total <= 0) continue;
     const wd = new Date(d.date + 'T00:00:00Z').getUTCDay();
     const isWeekend = (wd === 0 || wd === 6);
     const type = isWeekend ? 'weekend' : 'weekday';
     if (isWeekend) weCount++; else wdCount++;
+
     for (const p in d.periods) {
       const share = d.periods[p] / d.total;
       if (!groups[type][p]) groups[type][p] = [];
@@ -1256,6 +1257,32 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
       if (!s30Groups[type][p]) s30Groups[type][p] = [];
       s30Groups[type][p].push(s.num / s.den);
     }
+
+    // ✅ 博主合作 25/28 特殊日分组
+    if (biz === '博主合作') {
+      const dom = parseInt(d.date.slice(8, 10), 10);
+      if (dom === 25 || dom === 28) {
+        const cls = classifyDate(d.date);
+        if (cls !== 'holiday') {
+          const k = String(dom);
+          const sg = specialDayGroups[k];
+          sg.count++;
+          sg.dates.push(d.date);
+          for (const p in d.periods) {
+            const share = d.periods[p] / d.total;
+            if (!sg.shares[p]) sg.shares[p] = [];
+            sg.shares[p].push(share);
+          }
+          for (const p in d.s30) {
+            const s = d.s30[p];
+            if (s.den <= 0) continue;
+            if (!sg.s30[p]) sg.s30[p] = [];
+            sg.s30[p].push(s.num / s.den);
+          }
+        }
+      }
+    }
+
     dailyStats.push({ date: d.date, total: d.total, isWeekend, periods: Object.assign({}, d.periods), s30: Object.assign({}, d.s30) });
   }
 
@@ -1265,7 +1292,6 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     return emptyReturn();
   }
 
-  const avg = (group) => { const out = {}; for (const p in group) { const arr = group[p]; out[p] = arr.reduce((s, x) => s + x, 0) / arr.length; } return out; };
   const median = (group) => {
     const out = {};
     for (const p in group) {
@@ -1275,15 +1301,27 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     }
     return out;
   };
-  const weekdayRaw = median(groups.weekday);
-  const weekendRaw = median(groups.weekend);
+  const avg = (group) => { const out = {}; for (const p in group) { const arr = group[p]; out[p] = arr.reduce((s, x) => s + x, 0) / arr.length; } return out; };
   const normalize = (obj) => { let sum = 0; for (const p in obj) sum += obj[p]; if (sum <= 0) return obj; const out = {}; for (const p in obj) out[p] = obj[p] / sum; return out; };
   const fillPeriods = (obj) => { const out = {}; for (const p of sortedPeriods) out[p] = obj[p] || 0; return out; };
+
+  const weekdayRaw = median(groups.weekday);
+  const weekendRaw = median(groups.weekend);
   const weekday = normalize(fillPeriods(weekdayRaw));
   const weekendFinal = Object.keys(weekendRaw).length > 0 ? normalize(fillPeriods(weekendRaw)) : weekday;
   const weekdayS30 = avg(s30Groups.weekday);
   const weekendS30 = avg(s30Groups.weekend);
   const weekendS30Final = Object.keys(weekendS30).length > 0 ? weekendS30 : weekdayS30;
+
+  const specialDays = { '25': null, '28': null };
+  for (const k of ['25', '28']) {
+    const sg = specialDayGroups[k];
+    if (sg.count < 1) continue;
+    const medRaw = median(sg.shares);
+    const share = normalize(fillPeriods(medRaw));
+    const s30 = avg(sg.s30);
+    specialDays[k] = { share, s30, sampleCount: sg.count, dates: sg.dates.slice() };
+  }
 
   const abnormalDays = [];
   for (const d of dailyStats) {
@@ -1313,6 +1351,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     periods: sortedPeriods,
     diagnostic,
     usedRowCount: useRowCount,
+    specialDays,
   };
 }
 function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays) {
@@ -1324,11 +1363,35 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
     const date = dateAdd(startDate, i);
     if (!date) continue;
     const useWeekend = shouldUseWeekendPattern(date);
-    const typeLabel = dateTypeLabel(date);
-    const share = useWeekend ? stats.weekend : stats.weekday;
-    const s30Rate = useWeekend ? stats.weekendS30 : stats.weekdayS30;
+    let share, s30Rate, typeLabel, specialKind = null;
+    let usedSpecial = false;
+
+    // ✅ 博主合作 25/28 优先使用特殊日模板
+    if (biz === '博主合作' && stats.specialDays) {
+      const dom = parseInt(date.slice(8, 10), 10);
+      const isSpecialDom = (dom === 25 || dom === 28);
+      const cls = classifyDate(date);
+      const userHoliday = S.forecastHolidays && S.forecastHolidays.has(date);
+      if (isSpecialDom && cls !== 'holiday' && !userHoliday) {
+        const sd = stats.specialDays[String(dom)];
+        if (sd && sd.sampleCount >= 1) {
+          share = sd.share;
+          s30Rate = sd.s30;
+          typeLabel = '博主' + dom + '日';
+          specialKind = dom;
+          usedSpecial = true;
+        }
+      }
+    }
+
+    if (!usedSpecial) {
+      share = useWeekend ? stats.weekend : stats.weekday;
+      s30Rate = useWeekend ? stats.weekendS30 : stats.weekdayS30;
+      typeLabel = dateTypeLabel(date);
+    }
+
     const total = num(dailyTotals[date]);
-    const row = { date, useWeekend, typeLabel, total, periods: {}, s30Rate };
+    const row = { date, useWeekend, typeLabel, total, periods: {}, s30Rate, specialKind };
     for (const p of periods) row.periods[p] = total * (share[p] || 0);
     results.push(row);
   }
@@ -1341,15 +1404,19 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   lines.push('# ' + biz + ' · 时段量预测');
   lines.push('');
   lines.push('- 业务线口径：**按一级打点识别**（' + biz + '）');
-  lines.push('- 时段范围：**动态（按历史数据检测）**');
+  lines.push('- 时段范围：**9-23 时**（动态检测，共 ' + ((forecast.periods && forecast.periods.length) || 0) + ' 个）');
   lines.push('- 样本周期：' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '（近 ' + sampleWeeks + ' 周）');
   lines.push('- 计算维度：CASE 总量');
   lines.push('- 样本天数：工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天');
+  if (biz === '博主合作' && stats.specialDays) {
+    const tips = [];
+    if (stats.specialDays['25']) tips.push('25 日（' + stats.specialDays['25'].sampleCount + ' 天样本）');
+    if (stats.specialDays['28']) tips.push('28 日（' + stats.specialDays['28'].sampleCount + ' 天样本）');
+    if (tips.length) lines.push('- **博主特殊日模板**：' + tips.join('、') + ' 单独统计');
+  }
   lines.push('');
   const periodList = (forecast.periods && forecast.periods.length) ? forecast.periods : PREDICT_PERIODS;
-  lines.push('| 时段 | ' + results.map(r => {
-    return r.date.slice(5) + ' ' + r.typeLabel;
-  }).join(' | ') + ' |');
+  lines.push('| 时段 | ' + results.map(r => r.date.slice(5) + ' ' + r.typeLabel).join(' | ') + ' |');
   lines.push('| --- |' + results.map(() => ' ---: |').join(''));
   for (const p of periodList) {
     const cells = results.map(r => { const v = r.periods[p] || 0; return r.total > 0 ? String(Math.round(v)) : '—'; });
@@ -1385,18 +1452,59 @@ function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, da
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
     return { date: r.date, weekday: WEEKDAY_CN[wd], typeLabel: r.typeLabel, total: Math.round(r.total), periods: Object.fromEntries(periodList.map(p => [p, Math.round(r.periods[p] || 0)])) };
   });
-  return { biz, metricKey, sampleWeeks, startDate, days, sampleRange: stats.sampleRange, weekdayCount: stats.weekdayCount, weekendCount: stats.weekendCount, periodList, avgShare, avgS30, abnormalDays: stats.abnormalDays, historyDetail, forecastRows, thresholds: { s30Rate: s30Threshold(biz) } };
+
+  const specialDaysInfo = {};
+  if (stats.specialDays) {
+    for (const k of ['25', '28']) {
+      const sd = stats.specialDays[k];
+      if (!sd) { specialDaysInfo[k] = null; continue; }
+      specialDaysInfo[k] = {
+        sampleCount: sd.sampleCount,
+        dates: sd.dates,
+        share: Object.fromEntries(periodList.map(p => [p, ((sd.share[p] || 0) * 100).toFixed(2) + '%'])),
+        s30: Object.fromEntries(periodList.map(p => [p, sd.s30[p] != null ? (sd.s30[p] * 100).toFixed(2) + '%' : '—'])),
+      };
+    }
+  }
+
+  return {
+    biz, metricKey, sampleWeeks, startDate, days,
+    sampleRange: stats.sampleRange,
+    weekdayCount: stats.weekdayCount, weekendCount: stats.weekendCount,
+    periodList, avgShare, avgS30,
+    abnormalDays: stats.abnormalDays,
+    historyDetail, forecastRows,
+    thresholds: { s30Rate: s30Threshold(biz) },
+    specialDays: specialDaysInfo,
+  };
 }
 function formatForecastAiContext(ctx) {
   const L = [];
   L.push('【基本信息】');
   L.push('  业务线：' + ctx.biz + '（按一级打点识别）');
   L.push('  计算维度：CASE 总量（人工服务量）');
-  L.push('  时段范围：动态（按历史数据检测，共 ' + ctx.periodList.length + ' 个）');
+  L.push('  时段范围：9-23 时（共 ' + ctx.periodList.length + ' 个）');
   L.push('  样本周期：' + ctx.sampleRange.start + ' ~ ' + ctx.sampleRange.end + '（' + ctx.sampleWeeks + ' 周）');
   L.push('  样本天数：工作日 ' + ctx.weekdayCount + ' 天 / 周末 ' + ctx.weekendCount + ' 天');
   L.push('  30S 接起率阈值：' + (ctx.thresholds.s30Rate * 100).toFixed(2) + '%');
   L.push('');
+
+  if (ctx.specialDays && (ctx.specialDays['25'] || ctx.specialDays['28'])) {
+    L.push('【⚠️ 业务特殊日（仅博主合作）：每月 25 日 / 28 日为集中进线日】');
+    for (const k of ['25', '28']) {
+      const sd = ctx.specialDays[k];
+      if (!sd) {
+        L.push('  ' + k + ' 日：样本不足，未启用特殊模板。');
+        continue;
+      }
+      L.push('  ' + k + ' 日：样本 ' + sd.sampleCount + ' 天（' + (sd.dates.join('、') || '—') + '），时段占比如下：');
+      L.push('    时段 | ' + ctx.periodList.join(' | '));
+      L.push('    占比 | ' + ctx.periodList.map(p => sd.share[p] || '—').join(' | '));
+      L.push('    30S  | ' + ctx.periodList.map(p => sd.s30[p] || '—').join(' | '));
+    }
+    L.push('');
+  }
+
   L.push('【平均时段占比（用中位数计算，抗异常值）】');
   L.push('  时段 | 工作日占比 | 周末占比 | 工作日30S | 周末30S');
   for (const p of ctx.periodList) {
@@ -1422,6 +1530,7 @@ function formatForecastAiContext(ctx) {
   }
   L.push('');
   L.push('【未来预测（基于历史占比的原始计算值）】');
+  L.push('  说明：类型为「博主25日 / 博主28日」时，使用的是该业务特殊日模板；其余为常规模板。');
   L.push('  日期 | 类型 | 总量 | ' + ctx.periodList.map(p => p + '时').join(' | '));
   for (const r of ctx.forecastRows) {
     const cells = ctx.periodList.map(p => r.periods[p] || 0);
