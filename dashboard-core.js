@@ -995,7 +995,9 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     periodSet.add(p);
     if (!dayMap.has(r.date)) dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {} });
     const d = dayMap.get(r.date);
-    const v = num(r[metricKey]) || 0;
+    // ✅ 修复：兼容 metricKey='caseVolume' → 实际字段 r.volume
+    const rawMetric = (metricKey === 'caseVolume') ? r.volume : r[metricKey];
+    const v = num(rawMetric);
     d.periods[p] = (d.periods[p] || 0) + v;
     d.total += v;
     if (!d.s30[p]) d.s30[p] = { num: 0, den: 0 };
@@ -1051,6 +1053,13 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
       s30Groups[type][p].push(s.num / s.den);
     }
     dailyStats.push({ date: d.date, total: d.total, isWeekend, periods: Object.assign({}, d.periods), s30: Object.assign({}, d.s30) });
+  }
+
+  // ✅ 修复：如果 dayMap 有数据但 dailyStats 仍为空 → 明确诊断是"volume 全为 0"
+  if (!dailyStats.length) {
+    diagnostic.reason = 'zero-volume';
+    diagnostic.hint = '检测到 ' + dayMap.size + ' 天有数据、时段字段也正常，但这些天的 CASE 处理量（volume）合计为 0。请到「🔗 映射」页确认「人工服务量」字段是否指向了正确的列。';
+    return emptyReturn();
   }
 
   const avg = (group) => { const out = {}; for (const p in group) { const arr = group[p]; out[p] = arr.reduce((s, x) => s + x, 0) / arr.length; } return out; };
