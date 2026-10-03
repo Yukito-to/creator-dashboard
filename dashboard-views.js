@@ -194,6 +194,11 @@ function renderImportSummary() {
   const el = $('#importSummary');
   if (!el) return;
   if (!S.records.length && !S.roster.length) { el.innerHTML = ''; return; }
+  const volumeDays = (function() {
+    let cnt = 0;
+    for (const biz in S.volumeForecast) cnt += Object.keys(S.volumeForecast[biz] || {}).length;
+    return cnt;
+  })();
   const items = [
     ['花名册员工数', S.roster.length],
     ['买手员工数据行', S.records.filter(r => r.src === 'buyer').length],
@@ -209,6 +214,7 @@ function renderImportSummary() {
     ['博主合作预测量', Object.keys(S.forecastBlogger).length],
     ['业务线映射', Object.keys(S.businessMap).length],
     ['二级打点映射', Object.keys(S.business2Map).length],
+    ['预测量天数', volumeDays],
     ['数据主月份', S.month || '—'],
     ['最新日期', S.latestDate || '—'],
     ['最新 WK', 'WK' + (S.latestWK || '—')],
@@ -1203,34 +1209,50 @@ function renderForecastConfig() {
   if (!grid) return;
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
+  const bizEl = $('#fcBiz');
   if (!startEl || !daysEl) return;
 
+  const biz = (bizEl && bizEl.value) || '买手合作';
+
+  /* 自动读取「预测量」sheet */
+  const autoData = (S.volumeForecast && S.volumeForecast[biz]) ? S.volumeForecast[biz] : null;
+
+  /* 默认起始日期 = 预测量 sheet 有数据的最早日期，否则 = 数据最新日期 + 1 天 */
   if (!startEl.value) {
-    const defStart = S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10);
-    startEl.value = defStart;
+    if (autoData) {
+      const dates = Object.keys(autoData).sort();
+      startEl.value = dates[0] || dateAdd(S.latestDate, 1);
+    } else {
+      startEl.value = S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10);
+    }
   }
 
   const startDate = startEl.value;
   const days = parseInt(daysEl.value || '7', 10);
 
+  /* 保留已有输入 */
   const prevVals = {};
   grid.querySelectorAll('input[type=number]').forEach(inp => { prevVals[inp.dataset.date] = inp.value; });
   const prevHol = new Set();
   grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => { prevHol.add(chk.dataset.date); });
 
+  const hasAuto = !!autoData;
   const rows = [];
   for (let i = 0; i < days; i++) {
     const date = dateAdd(startDate, i);
     if (!date) continue;
     const wd = new Date(date + 'T00:00:00Z').getUTCDay();
     const isWeekend = (wd === 0 || wd === 6);
-    const val = prevVals[date] != null ? prevVals[date] : '';
+    const autoVal = (hasAuto && autoData[date] != null) ? autoData[date] : null;
+    const val = autoVal != null ? autoVal : (prevVals[date] != null ? prevVals[date] : '');
     const checked = prevHol.has(date) ? ' checked' : '';
     const cls = 'fc-daily-row' + (isWeekend ? ' fc-weekend' : '') + (checked ? ' fc-holiday-active' : '');
+    const readonly = autoVal != null ? ' readonly' : '';
+    const autoTag = autoVal != null ? '<span class="fc-auto-tag">自动</span>' : '';
     rows.push(
       '<div class="' + cls + '">' +
-        '<span class="fc-daily-date">' + esc(date) + ' 周' + WEEKDAY_CN[wd] + '</span>' +
-        '<input type="number" inputmode="numeric" step="1" min="0" placeholder="输入日总量" data-date="' + date + '" value="' + esc(val) + '">' +
+        '<span class="fc-daily-date">' + esc(date) + ' 周' + WEEKDAY_CN[wd] + autoTag + '</span>' +
+        '<input type="number" inputmode="numeric" step="1" min="0" placeholder="输入日总量" data-date="' + date + '" value="' + esc(val) + '"' + readonly + '>' +
         '<label class="fc-holiday"><input type="checkbox" data-date="' + date + '"' + checked + '> 节假日</label>' +
       '</div>'
     );
@@ -1243,6 +1265,19 @@ function renderForecastConfig() {
       if (row) row.classList.toggle('fc-holiday-active', chk.checked);
     });
   });
+
+  /* 顶部提示 */
+  const tipEl = $('#fcAutoTip');
+  if (tipEl) {
+    if (hasAuto) {
+      const cnt = Object.keys(autoData).length;
+      tipEl.innerHTML = '📥 已自动读取「预测量」sheet（' + esc(biz) + ' · ' + cnt + ' 天），输入框为只读；如需手改，请直接在 Excel 里改预测量 sheet。';
+      tipEl.style.display = 'block';
+    } else {
+      tipEl.innerHTML = '⚠ 未检测到「预测量」sheet 中「' + esc(biz) + '」的数据，请手动输入日总量；或在 Excel 里新增一个名为「预测量」的 sheet，第 1 行填日期（如 10/1），第 1 列填业务线（买手合作 / 博主合作）。';
+      tipEl.style.display = 'block';
+    }
+  }
 }
 
 function renderForecastResult() {
@@ -1252,8 +1287,8 @@ function renderForecastResult() {
 
   const bizEl = $('#fcBiz');
   const biz = (bizEl && bizEl.value) || '买手合作';
-  const metricEl = $('#fcMetric');
-  const metricKey = (metricEl && metricEl.value) || 'volume';
+  /* 计算维度固定为「CASE 总量（人工服务量）」 */
+  const metricKey = 'volume';
   const sampleEl = $('#fcSampleWeeks');
   const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
   const startEl = $('#fcStartDate');
@@ -1276,8 +1311,21 @@ function renderForecastResult() {
     });
   }
 
+  /* 补全：预测量 sheet 中有但用户没填的日期 */
+  const autoData = (S.volumeForecast && S.volumeForecast[biz]) || null;
+  if (autoData) {
+    for (const d in autoData) {
+      if (dailyTotals[d] == null) dailyTotals[d] = autoData[d];
+    }
+  }
+
   if (Object.keys(dailyTotals).length === 0) {
-    el.innerHTML = '<p class="muted">请至少输入一天的日度总量。</p>';
+    const hasAuto = !!(S.volumeForecast && Object.keys(S.volumeForecast).length);
+    el.innerHTML = '<p class="muted">' +
+      (hasAuto
+        ? '当前业务线（' + esc(biz) + '）在「预测量」sheet 中无数据，请手动输入日度总量。'
+        : '请至少输入一天的日度总量（或在 Excel 里新增「预测量」sheet 自动读取）。') +
+      '</p>';
     if (notes) notes.innerHTML = '';
     return;
   }
@@ -1289,19 +1337,7 @@ function renderForecastResult() {
     return;
   }
 
-  const allPeriods = new Set();
-  for (const r of forecast.results) for (const p in r.periods) allPeriods.add(p);
-  const periodList = Array.from(allPeriods).sort((a, b) => {
-    const ai = parseInt(a, 10), bi = parseInt(b, 10);
-    if (isFinite(ai) && isFinite(bi) && ai !== bi) return ai - bi;
-    return String(a).localeCompare(String(b));
-  });
-
-  if (!periodList.length) {
-    el.innerHTML = '<p class="muted">历史数据中未找到任何时段记录。</p>';
-    if (notes) notes.innerHTML = '';
-    return;
-  }
+  const periodList = PREDICT_PERIODS.slice();
 
   const head = '<tr><th>时段</th>' +
     forecast.results.map(r => {
@@ -1331,7 +1367,8 @@ function renderForecastResult() {
   el.innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + sumRow + '</tbody></table>';
 
   if (notes) {
-    notes.innerHTML = '📊 样本周期：' + forecast.stats.sampleRange.start + ' ~ ' + forecast.stats.sampleRange.end +
+    notes.innerHTML = '📊 业务线：按一级打点识别（' + esc(biz) + '）｜ 时段：9-23 时（15 个）｜ 样本周期：' +
+      forecast.stats.sampleRange.start + ' ~ ' + forecast.stats.sampleRange.end +
       '（近 ' + sampleWeeks + ' 周）｜ 工作日 ' + forecast.stats.weekdayCount + ' 天 / 周末 ' + forecast.stats.weekendCount +
       ' 天 ｜ 🎌 节假日按周末占比 · 🌴 周末' +
       (forecast.stats.weekendCount === 0 ? '（⚠ 周末样本不足，已回退工作日占比）' : '');
@@ -1341,8 +1378,7 @@ function renderForecastResult() {
 async function copyForecastMd() {
   const bizEl = $('#fcBiz');
   const biz = (bizEl && bizEl.value) || '买手合作';
-  const metricEl = $('#fcMetric');
-  const metricKey = (metricEl && metricEl.value) || 'volume';
+  const metricKey = 'volume';
   const sampleEl = $('#fcSampleWeeks');
   const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
   const startEl = $('#fcStartDate');
@@ -1359,6 +1395,13 @@ async function copyForecastMd() {
     if (!isNaN(v) && v > 0) dailyTotals[inp.dataset.date] = v;
   });
   grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => holidays.add(chk.dataset.date));
+
+  const autoData = (S.volumeForecast && S.volumeForecast[biz]) || null;
+  if (autoData) {
+    for (const d in autoData) {
+      if (dailyTotals[d] == null) dailyTotals[d] = autoData[d];
+    }
+  }
 
   if (Object.keys(dailyTotals).length === 0) { toast('请至少输入一天的总量'); return; }
 
@@ -1398,11 +1441,9 @@ async function runForecastAiAnalysis() {
   const btn = $('#btnFcAi');
   if (!outEl) return;
 
-  /* 校验配置 */
   const bizEl = $('#fcBiz');
   const biz = (bizEl && bizEl.value) || '买手合作';
-  const metricEl = $('#fcMetric');
-  const metricKey = (metricEl && metricEl.value) || 'volume';
+  const metricKey = 'volume';
   const sampleEl = $('#fcSampleWeeks');
   const sampleWeeks = parseInt((sampleEl && sampleEl.value) || '4', 10);
   const startEl = $('#fcStartDate');
@@ -1421,6 +1462,13 @@ async function runForecastAiAnalysis() {
   });
   grid.querySelectorAll('input[type=checkbox]:checked').forEach(chk => holidays.add(chk.dataset.date));
 
+  const autoData = (S.volumeForecast && S.volumeForecast[biz]) || null;
+  if (autoData) {
+    for (const d in autoData) {
+      if (dailyTotals[d] == null) dailyTotals[d] = autoData[d];
+    }
+  }
+
   if (Object.keys(dailyTotals).length === 0) { toast('请至少输入一天的总量'); return; }
 
   /* 校验 API Key */
@@ -1432,14 +1480,12 @@ async function runForecastAiAnalysis() {
     return;
   }
 
-  /* 生成基础预测 + AI 上下文 */
   const forecast = generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays);
   if (!forecast) { toast('样本数据不足'); return; }
 
   const ctx = buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays, forecast);
   const ctxText = formatForecastAiContext(ctx);
 
-  /* 取模型 */
   const modelEl = $('#aiModel');
   const model = (modelEl && modelEl.value) || 'glm-5.3-flash';
 
@@ -1447,12 +1493,11 @@ async function runForecastAiAnalysis() {
   outEl.innerHTML = '<div class="ai-cursor"></div>';
   if (btn) { btn.disabled = true; btn.textContent = '分析中…'; }
 
-  /* 构造 Prompt */
   const system = [
     '你是资深的客服排班与容量规划专家，擅长从历史时段数据中发现问题并给出精细化预测修正方案。',
     '',
     '【核心任务】',
-    '我基于历史平均占比给出了未来几天的时段预测量。请你：',
+    '我基于历史平均占比给出了未来几天的时段预测量（时段范围 9-23 时，共 15 个）。请你：',
     '1. **识别历史数据中不合理的数值**（异常天），说明为什么不合理，并在计算最终占比时剔除它们。',
     '2. **结合 30S 接起率**做调整——如果某时段接起率长期低于阈值，说明该时段处理能力不足，需适当上调预测量；反之若接起率远高于阈值且服务量偏低，可适当下调。',
     '3. 输出**修正后的时段预测量**（保留每天的日总量不变，只调整时段内部分配）。',
@@ -1476,7 +1521,8 @@ async function runForecastAiAnalysis() {
   ].join('\n');
 
   const user = [
-    '业务线：' + biz,
+    '业务线：' + biz + '（按一级打点识别）',
+    '时段范围：9-23 时（共 15 个）',
     '预测周期：' + startDate + ' 起 ' + days + ' 天',
     '样本周期：' + ctx.sampleRange.start + ' ~ ' + ctx.sampleRange.end,
     '',

@@ -49,7 +49,7 @@
       <div id="dropZone" class="dropzone">
         <div class="drop-icon">⬆</div>
         <div class="drop-text">点击选择文件</div>
-        <div class="drop-hint">自动识别：花名册 / 员工数据 / 质检 / 工时 / 业务线映射 / 二级打点映射 / 班次 / 班表 / 员工SLA</div>
+        <div class="drop-hint">自动识别：花名册 / 员工数据 / 质检 / 工时 / 业务线映射 / 二级打点映射 / 班次 / 班表 / 员工SLA / 预测量</div>
         <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv" hidden>
       </div>
       <div id="progressWrap" class="progress-wrap hidden">
@@ -190,7 +190,7 @@
   <section id="view-forecast" class="view">
     <div class="card">
       <div class="card-head">
-        <h2>🔮 时段量预测 <span class="help" data-tip="用历史时段占比，按你输入的日度总量分配出每个时段的预测量；支持周末/节假日区分，并接入 AI 做进一步分析与修正。">?</span></h2>
+        <h2>🔮 时段量预测 <span class="help" data-tip="业务线按一级打点识别，时段范围 9-23 时（共 15 个）。用历史时段占比，按预测量 sheet 或手动输入的日度总量分配出每个时段的预测量；支持周末/节假日区分，并接入 AI 做进一步分析与修正。">?</span></h2>
         <div class="head-controls">
           <label>业务线 <select id="fcBiz"></select></label>
         </div>
@@ -205,12 +205,6 @@
             <option value="8">近 8 周</option>
           </select>
         </label>
-        <label>计算维度
-          <select id="fcMetric">
-            <option value="volume" selected>人工服务量</option>
-            <option value="s30Den">30S 分母</option>
-          </select>
-        </label>
         <label>起始日期
           <input type="date" id="fcStartDate">
         </label>
@@ -221,6 +215,8 @@
           </select>
         </label>
       </div>
+
+      <div id="fcAutoTip" class="fc-auto-tip" style="display:none"></div>
 
       <h3 class="sub-title">📅 日度总量输入（每行填一天的总量）</h3>
       <div class="fc-daily-grid" id="fcDailyGrid"></div>

@@ -1592,7 +1592,7 @@ function renderAiMarkdown(md) {
   return s;
 }
 
-/* 智谱 API 调用 */
+/* 智谱 API 调用（SSE 流式 · 兼容 reasoning_content） */
 async function callZhipuAI(apiKey, model, messages, onChunk, signal, onDebug) {
   const url = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
   const resp = await fetch(url, {
@@ -2702,7 +2702,7 @@ function initSelects() {
   refreshExportOptions();
   renderTargetConfig();
 
-  /* 时段预测：默认起始日期 = 最新日期 + 1 */
+  /* 时段预测：默认起始日期 = 预测量 sheet 最早日期 或 最新日期 + 1 */
   const fcStart = $('#fcStartDate');
   if (fcStart && !fcStart.value) {
     fcStart.value = S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10);
@@ -2736,6 +2736,7 @@ function bindEvents() {
     S.slaBuyer = []; S.slaBlogger = [];
     S.businessMap = {}; S.business2Map = {}; S.shiftMap = {}; S.schedule = {};
     S.forecastBuyer = {}; S.forecastBlogger = {};
+    S.volumeForecast = {};
     S.scheduleDates = []; S.month = ''; S.latestDate = ''; S.latestWK = 0;
     S.expandedRows = new Set();
     const ds = $('#dataStatus'); if (ds) { ds.textContent = '未导入'; ds.classList.remove('pill-on'); ds.classList.add('pill-off'); }
@@ -2757,6 +2758,7 @@ function bindEvents() {
     const fc = $('#fcResult'); if (fc) fc.innerHTML = '';
     const fn = $('#fcNotes'); if (fn) fn.innerHTML = '';
     const fa = $('#fcAiOut'); if (fa) { fa.style.display = 'none'; fa.innerHTML = ''; }
+    const ftip = $('#fcAutoTip'); if (ftip) { ftip.style.display = 'none'; ftip.innerHTML = ''; }
     const ex = $('#exPreview'); if (ex) ex.innerHTML = '<div class="muted">选择条件后点击「生成预览」。</div>';
     const be = $('#btnExport'); if (be) be.disabled = true;
     const rb = $('#rpBody'); if (rb) rb.innerHTML = '';
@@ -2807,11 +2809,10 @@ function bindEvents() {
   on('#btnRpMd', 'click', downloadReportMd);
 
   /* 时段预测 */
-  on('#fcBiz', 'change', () => { renderForecastResult(); });
+  on('#fcBiz', 'change', () => { renderForecastConfig(); renderForecastResult(); });
   on('#fcStartDate', 'change', () => { renderForecastConfig(); renderForecastResult(); });
   on('#fcDays', 'change', () => { renderForecastConfig(); renderForecastResult(); });
   on('#fcSampleWeeks', 'change', renderForecastResult);
-  on('#fcMetric', 'change', renderForecastResult);
   on('#btnFcRun', 'click', renderForecastResult);
   on('#btnFcAi', 'click', runForecastAiAnalysis);
   on('#btnFcCopy', 'click', copyForecastMd);

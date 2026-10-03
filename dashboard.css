@@ -665,7 +665,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 /* ==================== 时段量预测 ==================== */
 .fc-config {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 12px 14px;
   background: var(--bg-2);
@@ -731,7 +731,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   font-size: 12.5px;
   color: var(--text);
   font-weight: 500;
-  width: 116px;
+  width: 140px;
   flex: none;
 }
 .fc-daily-row input[type=number] {
@@ -752,6 +752,11 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(152,168,206,.12);
 }
+.fc-daily-row input[type=number][readonly] {
+  background: #EAF1FB;
+  color: #4A6FA5;
+  cursor: not-allowed;
+}
 .fc-holiday {
   display: flex;
   align-items: center;
@@ -765,6 +770,30 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 .fc-holiday input {
   width: 15px; height: 15px;
   accent-color: #E8A33E;
+}
+
+/* 预测量 sheet 自动读取提示 */
+.fc-auto-tip {
+  font-size: 11.5px;
+  color: #4A6FA5;
+  background: #EAF1FB;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  line-height: 1.6;
+  border-left: 3px solid #7B8FBF;
+}
+.fc-auto-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #7B8FBF;
+  color: #fff;
+  margin-left: 6px;
+  line-height: 1.5;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 /* ==================== AI 周报分析 ==================== */
@@ -932,7 +961,7 @@ tbody tr:active td:first-child { background: #FAFAF7; }
     line-height: 1.6; z-index: 200;
     box-shadow: 0 6px 20px rgba(0,0,0,.15);
   }
-  .fc-config { grid-template-columns: repeat(4, 1fr); }
+  .fc-config { grid-template-columns: repeat(3, 1fr); }
   .fc-daily-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
   .ai-config { flex-direction: row; flex-wrap: wrap; }
   .ai-field { flex: 1 1 220px; }
