@@ -64,6 +64,11 @@ function isPredictPeriod(p) {
   const n = parseInt(p, 10);
   return isFinite(n) && n >= PREDICT_PERIOD_MIN && n <= PREDICT_PERIOD_MAX;
 }
+function periodSortKey(p) {
+  const n = parseInt(p, 10);
+  if (isFinite(n)) return n;
+  return 9999; // "—" / 非数字统一放最后
+}
 
 const BUYER_AHT2_ORDER = [['买手带货','业务介绍'],['买手带货','准入门槛'],['买手带货','买手撮合'],['买手带货','商家分销'],['买手带货','买手选品'],['买手带货','笔记带货'],['买手带货','橱窗带货'],['买手带货','蓝链带货'],['买手带货','直播带货'],['买手带货','营销运营'],['买手带货','直播间审核'],['买手带货','笔记审核'],['买手带货','账号违规'],['买手带货','买手拿样'],['买手带货','买手成长'],['买手带货','商家分销结算'],['买手带货','经营数据'],['买手带货','买手活动'],['买手带货','合作纠纷'],['买手带货','买手财务'],['买手合作','其他']];
 const BLOGGER_AHT2_ORDER = [['博主合作','蒲公英准入/准出'],['博主合作','蒲公英合作产品'],['博主合作','财务管理'],['博主合作','蒲公英审核'],['博主合作','健康等级'],['博主合作','蒲公英数据'],['博主合作','蒲公英合作纠纷'],['博主合作','蒲公英基础功能'],['蒲公英代理商','代理商入驻/审核'],['蒲公英代理商','蒲公英代理商保证金'],['蒲公英代理商','核实/解绑蒲公英代理商'],['蒲公英代理商','蒲公英代理商登录'],['蒲公英代理商','蒲公英代理商功能操作'],['蒲公英代理商','蒲公英代理商管理规范咨询'],['蒲公英代理商','蒲公英代理商策略'],['MCN机构（新）','MCN商业入驻'],['MCN机构（新）','MCN机构保证金'],['MCN机构（新）','MCN生态'],['博主合作','其他'],['博主合作','博主其他']];
@@ -84,7 +89,9 @@ const S = {
   s30Dates:new Set(), s30ShowSummary:true,
   expandedRows:new Set(),
   forecastBuyer:{}, forecastBlogger:{},
-  volumeForecast:{}  /* { '买手合作': { '2026-10-01': 144, ... }, '博主合作': {...} } */
+  volumeForecast:{},
+  forecastInputs:{},
+  forecastHolidays:new Set()
 };
 
 /* ==================== 格式化工具 ==================== */
@@ -736,7 +743,8 @@ function calcByL1(bizL1, opts) { const o = Object.assign({ bizL1 }, opts || {});
 /* ==================== 时间列与表头 ==================== */
 function timeCols() {
   const latest = S.latestDate;
-  const wks = [S.latestWK-2, S.latestWK-1, S.latestWK];
+  const baseWk = S.latestWK || 1;
+  const wks = [baseWk-2, baseWk-1, baseWk];
   const dateSet = new Set();
   for (const r of S.records) if (r.date) dateSet.add(r.date);
   for (const r of S.wtRecords) if (r.date) dateSet.add(r.date);
@@ -966,18 +974,25 @@ function darkenColor(hex, factor) {
 }
 
 /* ====================================================================
-   时段量预测 · 核心算法（仅 9-23 时，共 15 个时段）
+   时段量预测 · 核心算法
    ==================================================================== */
 function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const latest = refDate || S.latestDate;
   if (!latest) return null;
   const startDate = dateAdd(latest, -(sampleWeeks * 7 - 1));
   const dayMap = new Map();
+  const periodSet = new Set();
+  let scanned = 0;
+
   for (const r of S.records) {
     if (r.biz !== biz) continue;
     if (r.date < startDate || r.date > latest) continue;
-    const p = normPeriod(r.period) || '—';
-    if (!isPredictPeriod(p)) continue;
+    scanned++;
+    const pRaw = String(r.period == null ? '' : r.period).trim();
+    if (!pRaw) continue;
+    const p = normPeriod(pRaw);
+    if (!p) continue;
+    periodSet.add(p);
     if (!dayMap.has(r.date)) dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {} });
     const d = dayMap.get(r.date);
     const v = num(r[metricKey]) || 0;
@@ -987,6 +1002,33 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     d.s30[p].num += num(r.s30Num) || 0;
     d.s30[p].den += num(r.s30Den) || 0;
   }
+
+  const sortedPeriods = Array.from(periodSet).sort((a, b) => periodSortKey(a) - periodSortKey(b));
+  const diagnostic = {
+    scanned,
+    matchedDays: dayMap.size,
+    periodsDetected: sortedPeriods,
+    sampleRange: { start: startDate, end: latest },
+  };
+
+  const emptyReturn = () => ({
+    weekday: {}, weekend: {}, weekdayS30: {}, weekendS30: {},
+    weekdayCount: 0, weekendCount: 0,
+    sampleRange: { start: startDate, end: latest },
+    dailyStats: [], abnormalDays: [], periods: [], diagnostic,
+  });
+
+  if (!scanned) {
+    diagnostic.reason = 'no-records-in-range';
+    diagnostic.hint = '在样本周期 ' + startDate + ' ~ ' + latest + ' 内，业务线「' + biz + '」没有任何数据行。请检查导入的 CASE 日期范围是否覆盖该区间。';
+    return emptyReturn();
+  }
+  if (!dayMap.size) {
+    diagnostic.reason = 'no-period-data';
+    diagnostic.hint = '数据行有日期，但「CASE创建时段」字段全为空，无法做时段拆分。请到「🔗 映射」页检查该字段是否已正确映射。';
+    return emptyReturn();
+  }
+
   const groups = { weekday: {}, weekend: {} };
   const s30Groups = { weekday: {}, weekend: {} };
   let wdCount = 0, weCount = 0;
@@ -1010,6 +1052,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     }
     dailyStats.push({ date: d.date, total: d.total, isWeekend, periods: Object.assign({}, d.periods), s30: Object.assign({}, d.s30) });
   }
+
   const avg = (group) => { const out = {}; for (const p in group) { const arr = group[p]; out[p] = arr.reduce((s, x) => s + x, 0) / arr.length; } return out; };
   const median = (group) => {
     const out = {};
@@ -1023,12 +1066,13 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const weekdayRaw = median(groups.weekday);
   const weekendRaw = median(groups.weekend);
   const normalize = (obj) => { let sum = 0; for (const p in obj) sum += obj[p]; if (sum <= 0) return obj; const out = {}; for (const p in obj) out[p] = obj[p] / sum; return out; };
-  const fillPeriods = (obj) => { const out = {}; for (const p of PREDICT_PERIODS) out[p] = obj[p] || 0; return out; };
+  const fillPeriods = (obj) => { const out = {}; for (const p of sortedPeriods) out[p] = obj[p] || 0; return out; };
   const weekday = normalize(fillPeriods(weekdayRaw));
   const weekendFinal = Object.keys(weekendRaw).length > 0 ? normalize(fillPeriods(weekendRaw)) : weekday;
   const weekdayS30 = avg(s30Groups.weekday);
   const weekendS30 = avg(s30Groups.weekend);
   const weekendS30Final = Object.keys(weekendS30).length > 0 ? weekendS30 : weekdayS30;
+
   const abnormalDays = [];
   for (const d of dailyStats) {
     const type = d.isWeekend ? 'weekend' : 'weekday';
@@ -1047,11 +1091,21 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
       abnormalDays.push({ date: d.date, isWeekend: d.isWeekend, total: d.total, avgTotal: Math.round(avgTotal), totalDevPct: (totalDev * 100).toFixed(1), maxShareDev: (maxDev * 100).toFixed(1), maxDevPeriod: devPeriod });
     }
   }
-  return { weekday, weekend: weekendFinal, weekdayS30, weekendS30: weekendS30Final, weekdayCount: wdCount, weekendCount: weCount, sampleRange: { start: startDate, end: latest }, dailyStats, abnormalDays };
+
+  return {
+    weekday, weekend: weekendFinal,
+    weekdayS30, weekendS30: weekendS30Final,
+    weekdayCount: wdCount, weekendCount: weCount,
+    sampleRange: { start: startDate, end: latest },
+    dailyStats, abnormalDays,
+    periods: sortedPeriods,
+    diagnostic,
+  };
 }
 function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays) {
   const stats = calcPeriodStats(biz, metricKey, sampleWeeks);
   if (!stats) return null;
+  const periods = (stats.periods && stats.periods.length) ? stats.periods : PREDICT_PERIODS;
   const results = [];
   for (let i = 0; i < days; i++) {
     const date = dateAdd(startDate, i);
@@ -1063,10 +1117,10 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
     const s30Rate = (isHoliday || isWeekend) ? stats.weekendS30 : stats.weekdayS30;
     const total = num(dailyTotals[date]);
     const row = { date, isWeekend, isHoliday, total, periods: {}, s30Rate };
-    for (const p of PREDICT_PERIODS) row.periods[p] = total * (share[p] || 0);
+    for (const p of periods) row.periods[p] = total * (share[p] || 0);
     results.push(row);
   }
-  return { stats, results };
+  return { stats, results, periods };
 }
 function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   if (!forecast) return '';
@@ -1075,12 +1129,12 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   lines.push('# ' + biz + ' · 时段量预测');
   lines.push('');
   lines.push('- 业务线口径：**按一级打点识别**（' + biz + '）');
-  lines.push('- 时段范围：**9-23 时**（共 15 个时段）');
+  lines.push('- 时段范围：**动态（按历史数据检测）**');
   lines.push('- 样本周期：' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '（近 ' + sampleWeeks + ' 周）');
   lines.push('- 计算维度：CASE 总量');
   lines.push('- 样本天数：工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天');
   lines.push('');
-  const periodList = PREDICT_PERIODS.slice();
+  const periodList = (forecast.periods && forecast.periods.length) ? forecast.periods : PREDICT_PERIODS;
   lines.push('| 时段 | ' + results.map(r => {
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
     const tag = r.isHoliday ? '🎌' : (r.isWeekend ? '🌴' : '');
@@ -1097,7 +1151,7 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
 }
 function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays, forecast) {
   const { stats, results } = forecast;
-  const periodList = PREDICT_PERIODS.slice();
+  const periodList = (forecast.periods && forecast.periods.length) ? forecast.periods : PREDICT_PERIODS;
   const historyDetail = stats.dailyStats.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(d => {
     const row = { date: d.date, weekday: WEEKDAY_CN[new Date(d.date + 'T00:00:00Z').getUTCDay()], type: d.isWeekend ? '周末' : '工作日', total: Math.round(d.total), periods: {} };
     for (const p of periodList) {
@@ -1128,7 +1182,7 @@ function formatForecastAiContext(ctx) {
   L.push('【基本信息】');
   L.push('  业务线：' + ctx.biz + '（按一级打点识别）');
   L.push('  计算维度：CASE 总量（人工服务量）');
-  L.push('  时段范围：9-23 时（共 15 个时段）');
+  L.push('  时段范围：动态（按历史数据检测，共 ' + ctx.periodList.length + ' 个）');
   L.push('  样本周期：' + ctx.sampleRange.start + ' ~ ' + ctx.sampleRange.end + '（' + ctx.sampleWeeks + ' 周）');
   L.push('  样本天数：工作日 ' + ctx.weekdayCount + ' 天 / 周末 ' + ctx.weekendCount + ' 天');
   L.push('  30S 接起率阈值：' + (ctx.thresholds.s30Rate * 100).toFixed(2) + '%');

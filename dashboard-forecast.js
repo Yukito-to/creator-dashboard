@@ -15,7 +15,6 @@ function renderForecastConfig() {
   const startDate = startEl ? startEl.value : (S.latestDate ? dateAdd(S.latestDate, 1) : new Date().toISOString().slice(0, 10));
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
 
-  // 初始化本地输入缓存
   if (!S.forecastInputs) S.forecastInputs = {};
   if (!S.forecastInputs[biz]) S.forecastInputs[biz] = {};
 
@@ -28,8 +27,7 @@ function renderForecastConfig() {
     if (!date) continue;
     const wd = new Date(date + 'T00:00:00Z').getUTCDay();
     const isWeekend = (wd === 0 || wd === 6);
-    
-    // 优先使用用户手动输入的值，其次使用导入的预测量，最后为空
+
     let val = S.forecastInputs[biz][date];
     let isAuto = false;
     if (val === undefined || val === '') {
@@ -43,7 +41,7 @@ function renderForecastConfig() {
     }
 
     const rowClass = isWeekend ? 'fc-daily-row fc-weekend' : 'fc-daily-row';
-    const readonly = isAuto ? 'readonly' : '';
+    const readonly = '';
     const autoTag = isAuto ? '<span class="fc-auto-tag">预测量</span>' : '';
 
     html += '<div class="' + rowClass + '" data-date="' + date + '">' +
@@ -55,38 +53,34 @@ function renderForecastConfig() {
 
   grid.innerHTML = html || '<div class="muted">请选择日期范围。</div>';
 
-  // 自动填充提示
   const tipEl = $('#fcAutoTip');
   if (tipEl) {
     if (hasAutoData) {
       tipEl.style.display = 'block';
-      tipEl.innerHTML = '💡 检测到导入的「预测量」数据，已自动填充。带 <span class="fc-auto-tag">预测量</span> 标记的输入框为只读，如需覆盖请清空输入框或修改原始数据。';
+      tipEl.innerHTML = '💡 检测到导入的「预测量」数据，已自动填充。带 <span class="fc-auto-tag">预测量</span> 标记的输入框可直接修改覆盖。';
     } else {
       tipEl.style.display = 'none';
     }
   }
 
-  // 绑定输入事件
   grid.querySelectorAll('input[type=number]').forEach(inp => {
     inp.addEventListener('input', () => {
       const d = inp.dataset.date;
-      if (inp.readOnly) return;
       S.forecastInputs[biz][d] = inp.value;
     });
   });
 
-  // 绑定节假日复选框事件
   grid.querySelectorAll('input[type=checkbox]').forEach(chk => {
     chk.addEventListener('change', () => {
       const d = chk.dataset.date;
       if (!S.forecastHolidays) S.forecastHolidays = new Set();
       if (chk.checked) S.forecastHolidays.add(d);
       else S.forecastHolidays.delete(d);
+      try { localStorage.setItem('creator_forecast_holidays', JSON.stringify([...S.forecastHolidays])); } catch (_) {}
       renderForecastResult();
     });
   });
 
-  // 重新渲染结果
   renderForecastResult();
 }
 
@@ -117,7 +111,7 @@ function renderForecastResult() {
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
   const weeksEl = $('#fcSampleWeeks');
-  
+
   const startDate = startEl ? startEl.value : '';
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
   const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
@@ -137,21 +131,36 @@ function renderForecastResult() {
 
   const holidays = S.forecastHolidays || new Set();
   const forecast = generateForecast(biz, 'caseVolume', sampleWeeks, startDate, days, dailyTotals, holidays);
-  
+
   if (!forecast) {
     el.innerHTML = '<p class="muted">无法生成预测，请检查历史数据是否充足。</p>';
     if (notesEl) notesEl.innerHTML = '';
     return;
   }
 
-  const { stats, results } = forecast;
-  const periodList = PREDICT_PERIODS.slice();
+  const { stats, results, periods } = forecast;
+  const periodList = (periods && periods.length) ? periods : PREDICT_PERIODS;
+  const diag = stats.diagnostic || {};
 
-  // 生成表格
-  let thead = '<tr><th>日期</th><th>类型</th><th>总量</th>';
-  for (const p of periodList) {
-    thead += '<th>' + p + '时</th>';
+  if (!stats.dailyStats || stats.dailyStats.length === 0) {
+    const periodDisp = (diag.periodsDetected && diag.periodsDetected.length)
+      ? diag.periodsDetected.join('、')
+      : '（无）';
+    el.innerHTML =
+      '<div style="padding:14px 16px;background:#FFF7E6;border-radius:10px;border-left:3px solid #E8A33E;line-height:1.9;font-size:13px">' +
+      '<div style="font-weight:700;color:#B36A00;margin-bottom:6px">⚠ 未能从历史数据中提取时段占比</div>' +
+      '<div>扫描数据行：<b>' + (diag.scanned || 0) + '</b> 条（样本周期 ' +
+        (diag.sampleRange ? diag.sampleRange.start + ' ~ ' + diag.sampleRange.end : '—') + '）</div>' +
+      '<div>有效天数：<b>' + (diag.matchedDays || 0) + '</b> 天</div>' +
+      '<div>检测到的时段：<b>' + periodDisp + '</b></div>' +
+      (diag.hint ? '<div style="margin-top:8px;color:#B36A00">' + esc(diag.hint) + '</div>' : '') +
+      '</div>';
+    if (notesEl) notesEl.innerHTML = '';
+    return;
   }
+
+  let thead = '<tr><th>日期</th><th>类型</th><th>总量</th>';
+  for (const p of periodList) thead += '<th>' + esc(p) + '时</th>';
   thead += '</tr>';
 
   let tbody = '';
@@ -159,12 +168,12 @@ function renderForecastResult() {
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
     const type = r.isHoliday ? '节假日' : (r.isWeekend ? '周末' : '工作日');
     const typeCls = r.isHoliday ? 'style="color:#E8A33E;font-weight:600"' : (r.isWeekend ? 'style="color:#C4B0CE;font-weight:600"' : '');
-    
+
     tbody += '<tr>' +
       '<td>' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + '</td>' +
       '<td ' + typeCls + '>' + type + '</td>' +
       '<td style="font-weight:600">' + Math.round(r.total) + '</td>';
-    
+
     for (const p of periodList) {
       const v = r.periods[p] || 0;
       tbody += '<td>' + (r.total > 0 ? Math.round(v) : '—') + '</td>';
@@ -172,8 +181,7 @@ function renderForecastResult() {
     tbody += '</tr>';
   }
 
-  // 添加合计行
-  let totalRow = '<tr style="background:#F4F3EF;font-weight:600"><td>合计</td><td>—</td><td>' + 
+  let totalRow = '<tr style="background:#F4F3EF;font-weight:600"><td>合计</td><td>—</td><td>' +
     Math.round(results.reduce((s, r) => s + r.total, 0)) + '</td>';
   for (const p of periodList) {
     const sum = results.reduce((s, r) => s + (r.periods[p] || 0), 0);
@@ -183,7 +191,6 @@ function renderForecastResult() {
 
   el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + totalRow + '</tbody></table></div>';
 
-  // 渲染备注信息
   if (notesEl) {
     let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '。</div>';
     if (stats.abnormalDays && stats.abnormalDays.length) {
@@ -217,7 +224,7 @@ async function runForecastAiAnalysis() {
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
   const weeksEl = $('#fcSampleWeeks');
-  
+
   const startDate = startEl ? startEl.value : '';
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
   const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
@@ -234,6 +241,11 @@ async function runForecastAiAnalysis() {
   if (!forecast) {
     outEl.style.display = 'block';
     outEl.innerHTML = '<div class="ai-err">❌ 无法生成预测数据，请检查历史记录。</div>';
+    return;
+  }
+  if (!forecast.stats.dailyStats || forecast.stats.dailyStats.length === 0) {
+    outEl.style.display = 'block';
+    outEl.innerHTML = '<div class="ai-err">❌ 历史数据中没有可用的时段占比。请先在「🔗 映射」页确认「CASE创建时段」字段已正确映射。</div>';
     return;
   }
 
@@ -305,7 +317,7 @@ function copyForecastMd() {
   const startEl = $('#fcStartDate');
   const daysEl = $('#fcDays');
   const weeksEl = $('#fcSampleWeeks');
-  
+
   const startDate = startEl ? startEl.value : '';
   const days = daysEl ? parseInt(daysEl.value, 10) : 7;
   const sampleWeeks = weeksEl ? parseInt(weeksEl.value, 10) : 4;
@@ -348,6 +360,7 @@ function clearForecastInputs() {
   if (S.forecastHolidays) {
     S.forecastHolidays.clear();
   }
+  try { localStorage.removeItem('creator_forecast_holidays'); } catch (_) {}
   const outEl = $('#fcAiOut');
   if (outEl) { outEl.style.display = 'none'; outEl.innerHTML = ''; }
   renderForecastConfig();
