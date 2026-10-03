@@ -1592,7 +1592,7 @@ function renderAiMarkdown(md) {
   return s;
 }
 
-/* 智谱 API 调用（SSE 流式 · 兼容 reasoning_content） */
+/* 智谱 API 调用 */
 async function callZhipuAI(apiKey, model, messages, onChunk, signal, onDebug) {
   const url = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
   const resp = await fetch(url, {
@@ -1691,7 +1691,7 @@ async function callZhipuAI(apiKey, model, messages, onChunk, signal, onDebug) {
   if (onDebug) onDebug('流结束（未收到 DONE）：原始行数=' + rawLines + '，data 行数=' + dataLines + '，内容 chunk 数=' + chunkCount);
 }
 
-/* ==================== 月度上下文（按 focus 精简字段） ==================== */
+/* ==================== 月度上下文（按 focus 精简） ==================== */
 function buildMonthContext(biz, wk, focus) {
   focus = focus || '综合';
   const src = bizToSrc(biz);
@@ -1805,7 +1805,7 @@ function buildMonthContext(biz, wk, focus) {
   };
 }
 
-/* ==================== 组装 AI 上下文（按 focus 过滤数据） ==================== */
+/* ==================== 组装 AI 上下文（按 focus 过滤数据 + 质量日度/员工明细） ==================== */
 function buildAiContextData(biz, wk, focus) {
   focus = focus || '综合';
   const src = bizToSrc(biz);
@@ -1816,6 +1816,7 @@ function buildAiContextData(biz, wk, focus) {
   const needAHT     = (focus === 'AHT' || focus === '综合' || focus === '对比');
   const needQuality = (focus === '质量' || focus === '综合' || focus === '对比');
   const needAll     = (focus === '综合' || focus === '对比');
+  const srcEmps = srcEmployeeSet(src);
 
   /* ① 30S 明细 */
   if (need30S) {
@@ -1850,6 +1851,58 @@ function buildAiContextData(biz, wk, focus) {
     }
   }
 
+  /* ①.5 质量指标日度明细（focus=质量/综合/对比时给） */
+  if (needQuality) {
+    const qDayMap = new Map();
+    const recs = S.records.filter(r => r.src === src && r.wk === wk);
+    for (const r of recs) {
+      if (!qDayMap.has(r.date)) {
+        qDayMap.set(r.date, { date: r.date, volume: 0, solved: 0, solveEval: 0, satisfy: 0, satisfyEval: 0 });
+      }
+      const d = qDayMap.get(r.date);
+      d.volume += r.volume;
+      d.solved += r.solved;
+      d.solveEval += r.solveEval;
+      d.satisfy += r.satisfy;
+      d.satisfyEval += r.satisfyEval;
+    }
+    /* 质检按日期 */
+    const inspByDay = new Map();
+    for (const r of S.inspections) {
+      if (r.src !== src || r.wk !== wk) continue;
+      if (!inspByDay.has(r.date)) inspByDay.set(r.date, { total: 0, pass: 0, ids: new Set() });
+      const o = inspByDay.get(r.date);
+      if (!o.ids.has(r.id)) { o.ids.add(r.id); o.total++; if (r.pass) o.pass++; }
+    }
+    out.qualityDays = Array.from(qDayMap.values()).sort((a, b) => a.date < b.date ? -1 : 1).map(d => {
+      const insp = inspByDay.get(d.date);
+      return {
+        date: d.date,
+        solveRate: d.solveEval > 0 ? d.solved / d.solveEval : null,
+        satisfaction: d.satisfyEval > 0 ? d.satisfy / d.satisfyEval : null,
+        qualityPassRate: (insp && insp.total > 0) ? insp.pass / insp.total : null,
+        qualityTotal: insp ? insp.total : 0,
+      };
+    });
+
+    /* 员工维度的质量明细 */
+    const qEmps = [];
+    for (const e of S.roster.filter(x => employeeVisible(x) && srcEmps.has(x.name))) {
+      const nameSet = new Set([e.name]);
+      const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
+      if (c.caseVolume === 0) continue;
+      qEmps.push({
+        name: e.name, group: e.group || '—', category: categoryOf(e, S.month) || '—',
+        caseVolume: c.caseVolume,
+        solveRate: c.solveRate, satisfaction: c.satisfaction,
+        qualityPassRate: c.qualityPassRate,
+        solveEval: c.solveEval, satisfyEval: c.satisfyEval,
+      });
+    }
+    qEmps.sort((a, b) => (a.solveRate || 99) - (b.solveRate || 99));
+    out.qualityEmps = qEmps;
+  }
+
   /* ② 4 周基线 */
   try {
     const wks = [];
@@ -1858,10 +1911,7 @@ function buildAiContextData(biz, wk, focus) {
       const c = calcBySrc(src, { wkSet: new Set([w]) });
       if (c.caseVolume === 0 && c.s30Den === 0) continue;
       const s30 = calcByL1(biz, { wkSet: new Set([w]) });
-      const row = {
-        wk: w,
-        caseVolume: c.caseVolume,
-      };
+      const row = { wk: w, caseVolume: c.caseVolume };
       if (needAHT) {
         row.cpd = c.cpd; row.aht = c.aht;
         row.concurrency = c.concurrency; row.utilization = c.utilization;
@@ -1905,8 +1955,7 @@ function buildAiContextData(biz, wk, focus) {
     }
   } catch (_) {}
 
-  /* ③ 员工明细 */
-  const srcEmps = srcEmployeeSet(src);
+  /* ③ 员工明细（按 focus 精简字段） */
   const allEmps = S.roster.filter(e => employeeVisible(e) && srcEmps.has(e.name));
   for (const e of allEmps) {
     const nameSet = new Set([e.name]);
@@ -1931,7 +1980,7 @@ function buildAiContextData(biz, wk, focus) {
     out.emps.push(row);
   }
 
-  /* ④ 分类明细 */
+  /* ④ 分类明细（按 focus 精简） */
   for (const cat of ['首月','次月','老人']) {
     const names = allEmps.filter(e => (categoryOf(e, S.month) || '').includes(cat)).map(e => e.name);
     if (!names.length) continue;
@@ -1952,7 +2001,7 @@ function buildAiContextData(biz, wk, focus) {
     out.byCat[cat] = row;
   }
 
-  /* ⑤ 组别明细 */
+  /* ⑤ 组别明细（按 focus 精简） */
   const groupMap = {};
   for (const e of allEmps) { const g = e.group || '—'; (groupMap[g] = groupMap[g] || []).push(e.name); }
   out.groups = Object.keys(groupMap).sort().map(g => {
@@ -1972,7 +2021,7 @@ function buildAiContextData(biz, wk, focus) {
     return row;
   }).filter(g => g.caseVolume != null ? g.caseVolume > 0 : true);
 
-  /* ⑥ 二级打点 AHT */
+  /* ⑥ 二级打点 AHT（只 AHT 相关才给） */
   if (needAHT) {
     try {
       const aht2 = aht2ByWeek(biz, wk);
@@ -2011,7 +2060,7 @@ function buildAiContextData(biz, wk, focus) {
   return out;
 }
 
-/* ==================== AI Prompt 组装（含范围约束） ==================== */
+/* ==================== AI Prompt 组装（含范围约束 + 指标纯度） ==================== */
 function buildStage1Prompt(biz, wk, focus, ctx) {
   const scopeMap = {
     '综合': '所有维度',
@@ -2031,7 +2080,7 @@ function buildStage1Prompt(biz, wk, focus, ctx) {
     '范围外的指标，即使数据里有异常，也**绝对不要**出现在输出中。',
     '',
     '【异常定义】满足以下任一条件即为异常，必须列出：',
-    '- 日度：单日指标偏离该星期几的近 4 周均值超过 5%，**或偏离本月均值超过 8%**',
+    '- 日度：单日指标偏离该星期几的近 4 周均值超过 5%，或偏离本月均值超过 8%',
     '- 月度对照：本周指标与本月均值差异 > 10%，或与本月最佳/最差周差异显著',
     '- 时段：单时段 Miss 量 ≥ 10，或接起率 < 阈值 - 5pp',
     '- 员工：单员工接起率 < 阈值 - 5pp 且服务量 ≥ 20；或员工间接起率极差 > 15pp',
@@ -2045,7 +2094,7 @@ function buildStage1Prompt(biz, wk, focus, ctx) {
     '  "anomalies": [',
     '    { "type": "日度/时段/员工/分类/组别/环比/预测/月度对照",',
     '      "target": "精确坐标，如 09-16 16时 或 张三 或 一组",',
-    '      "metric": "指标名",',
+    '      "metric": "指标名（必须是本范围内的指标）",',
     '      "value": "本周值",',
     '      "baseline": "对比基线值（如近4周均值 / 本月均值 / 阈值 / 上周值）",',
     '      "gap": "差距（绝对值或百分比）",',
@@ -2096,21 +2145,29 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
     '如果第一阶段的异常列表中包含范围外的指标，直接跳过，不要分析。',
     '',
     '【分析框架（每个异常必须严格按此展开）】',
-    '### N. [异常标题]',
-    '**现象**：用一句话描述异常（含坐标 + 数字）。',
-    '**数据**：列出支撑该现象的 2~4 个具体数据点（引用明细中的数字）。',
-    '**周内定位**：说明这是周内第几天/哪个时段发生的，与周内其他天/时段相比如何。',
-    '**月度定位**：**必须说明本周该指标在本月各周中的排名/位置**（如"本周 30S 接起率 88.2%，是本月 4 周中最低的，月均 92.1%，偏离 -3.9pp"），以及本月每日该指标是否出现趋势性变化。',
-    '**基线**：说明为什么算异常——与近 4 周均值/阈值/上周/月度均值的对比。',
-    '**根因推断**：给出 2~3 个可能根因，并按可能性排序，每个根因说明"为什么这么推测"。',
-    '**验证方法**：如果要做实根因，需要补充什么数据或做什么动作。',
-    '**行动建议**：【谁 + 做什么 + 预期效果 + 衡量标准】，2~3 条。',
+    '### N. [异常标题：指标 + 方向 + 数值]',
+    '**现象**：用一句话描述异常，**必须**含：坐标（日期或时段或人名）+ 该指标本周值 + 对比值 + 差距。',
+    '**数据**：列出 2~4 个数据点。**每一条数据必须是本异常指标的直接数据**——',
+    '  - 如果异常是"解决率下降"，就列解决率的周值/日值/员工值；',
+    '  - **禁止**把满意度、质检率等其他指标也列进来凑数；',
+    '  - 只有作为"相关性旁证"时，才允许在**最后一条**列一次其他指标，且必须标注"（旁证）"。',
+    '**周内定位**：**必须**说出具体是哪一天/哪个时段最差。',
+    '  - 如果本指标有日度明细数据（见上文「日度明细」表），直接引用最差/最好的日期；',
+    '  - 如果**本指标没有**日度数据，就明说"本指标无日度明细数据，无法定位到具体日期"，不要跳过此段。',
+    '**月度定位**：本周指标在本月各周中的排名（最低/最高/中位），以及与月均值的偏离。',
+    '**基线**：与近 4 周均值 / 上周 / 阈值 / 本月均值分别对比，说明为什么算异常。',
+    '**根因推断**：给出 2~3 个可能根因，每个根因**必须**引用具体数据（哪个员工、哪一天、哪个分类），按可能性排序。',
+    '**验证方法**：为证实/排除每个根因，需要查看什么数据或做什么检查。',
+    '**行动建议**：【谁 + 做什么 + 预期效果 + 如何衡量】，2~3 条。**必须**能落到人/组/日期上，不能泛泛说"加强培训"。',
     '',
     '【硬性要求】',
-    '1. 每条分析必须引用具体数字，禁止"较高""偏低"等模糊表述；',
-    '2. 根因必须落到"人 / 流程 / 系统 / 预测模型"四类之一；',
-    '3. 行动建议必须可执行、可衡量，不能是"加强管理"这种空话；',
-    '4. 数据不足以判断时，明确说"数据不足，需要 XX"。',
+    '1. **指标纯度**：每一条数据都要标清属于哪个指标，禁止把 A 指标的结论挂在 B 指标下。',
+    '2. **具体可溯源**：引用数字时必须带坐标（日期 / 时段 / 人名 / 组名）。',
+    '3. **禁止空泛**：',
+    '   ❌ 反例："人员能力不足，建议加强培训。"',
+    '   ✅ 正例："张三（组别A，首月）解决率 48.2%，低于组均 65.1% 约 17pp，其本周处理 120 单中仅 58 单有解决评价且 28 单好评；建议对其 3 月 15-17 日的 40 单做逐单复盘。"',
+    '4. **根因必须落到"人 / 流程 / 系统 / 数据口径"四类之一**。',
+    '5. **数据不足时明说**："本指标缺 XX 数据，无法判断 XX"，不要编造。',
   ].join('\n');
 
   const anomalyList = anomalies.map((a, i) =>
@@ -2143,7 +2200,7 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
   ];
 }
 
-/* ==================== AI 上下文格式化（按 focus 精简） ==================== */
+/* ==================== AI 上下文格式化（含质量日度/员工明细） ==================== */
 function formatAiContext(ctx) {
   const lines = [];
   const focus = ctx.focus || '综合';
@@ -2154,7 +2211,7 @@ function formatAiContext(ctx) {
 
   const need30S     = !!ctx.s30;
   const needAHT     = !!(ctx.aht2 && ctx.aht2.length) || focus === 'AHT';
-  const needQuality = !!(ctx.byCat && Object.keys(ctx.byCat).some(k => ctx.byCat[k] && ctx.byCat[k].solveRate != null));
+  const needQuality = focus === '质量' || focus === '综合' || focus === '对比';
 
   /* 基线 */
   if (ctx.baseline && ctx.baseline.weeks && ctx.baseline.weeks.length) {
@@ -2173,7 +2230,7 @@ function formatAiContext(ctx) {
     }
     lines.push('');
     if (need30S && ctx.baseline.dayOfWeek && Object.keys(ctx.baseline.dayOfWeek).length) {
-      lines.push('【30S 按星期几的近 4 周基线（用于判断某天算不算异常）】');
+      lines.push('【30S 按星期几的近 4 周基线】');
       lines.push('  星期 | 均值 | 最小 | 最大 | 样本数');
       for (const k of ['一','二','三','四','五','六','日']) {
         const b = ctx.baseline.dayOfWeek[k];
@@ -2241,6 +2298,27 @@ function formatAiContext(ctx) {
       }
       lines.push('');
     }
+  }
+
+  /* 质量指标日度明细（新增） */
+  if (ctx.qualityDays && ctx.qualityDays.length) {
+    lines.push('【🎯 质量指标 · 日度明细（找具体哪一天最差）】');
+    lines.push('  日期       | 解决率   | 满意度   | 质检合格率 | 抽检量');
+    for (const d of ctx.qualityDays) {
+      lines.push('  ' + d.date + ' | ' + p2(d.solveRate) + ' | ' + p2(d.satisfaction) + ' | ' + p2(d.qualityPassRate) + ' | ' + d.qualityTotal);
+    }
+    lines.push('');
+  }
+
+  /* 质量指标员工明细（新增） */
+  if (ctx.qualityEmps && ctx.qualityEmps.length) {
+    lines.push('【🎯 质量指标 · 员工维度（按解决率升序，最差在前 Top 15）】');
+    lines.push('  姓名 | 组别 | 分类 | CASE | 解决率 | 满意度 | 质检率 | 解决评价量 | 满意评价量');
+    const sorted = ctx.qualityEmps.slice(0, 15);
+    for (const e of sorted) {
+      lines.push('  ' + e.name + ' | ' + e.group + ' | ' + e.category + ' | ' + i0(e.caseVolume) + ' | ' + p2(e.solveRate) + ' | ' + p2(e.satisfaction) + ' | ' + p2(e.qualityPassRate) + ' | ' + i0(e.solveEval) + ' | ' + i0(e.satisfyEval));
+    }
+    lines.push('');
   }
 
   /* 分类明细 */
@@ -2441,7 +2519,6 @@ async function runAiAnalysis() {
   const biz = (bizEl && bizEl.value) || '买手合作';
   const wk = parseInt((wkEl && wkEl.value) || '', 10) || S.latestWK;
 
-  /* 组装上下文（传入 focus） */
   let ctx = null;
   try {
     ctx = buildAiContextData(biz, wk, focus);
@@ -2490,7 +2567,6 @@ async function runAiAnalysis() {
       if (!buffer.trim() && reasoningBuf.trim()) buffer = reasoningBuf;
       render();
     } else {
-      /* 阶段 1 */
       outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 / 2：扫描异常点…（范围：' + esc(focus) + '）</div><div class="ai-cursor"></div>';
       const stage1Messages = buildStage1Prompt(biz, wk, focus, ctx);
       let stage1Buf = '';
@@ -2534,7 +2610,6 @@ async function runAiAnalysis() {
         return;
       }
 
-      /* 阶段 2 */
       outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 完成：识别出 <b>' + anomalies.length + '</b> 个异常点（范围：' + esc(focus) + '）</div>' +
         '<div style="background:#FAF9F7;padding:10px 14px;border-radius:8px;border-left:3px solid #98A8CE;font-size:12px;line-height:1.8;margin-bottom:12px">' +
         anomalies.map((a, i) => '• [' + esc(a.type) + '] ' + esc(a.target) + ' · ' + esc(a.metric) + ' = ' + esc(String(a.value)) + '（基线 ' + esc(String(a.baseline)) + '）').join('<br>') +
