@@ -67,7 +67,7 @@ function isPredictPeriod(p) {
 function periodSortKey(p) {
   const n = parseInt(p, 10);
   if (isFinite(n)) return n;
-  return 9999; // "—" / 非数字统一放最后
+  return 9999;
 }
 
 const BUYER_AHT2_ORDER = [['买手带货','业务介绍'],['买手带货','准入门槛'],['买手带货','买手撮合'],['买手带货','商家分销'],['买手带货','买手选品'],['买手带货','笔记带货'],['买手带货','橱窗带货'],['买手带货','蓝链带货'],['买手带货','直播带货'],['买手带货','营销运营'],['买手带货','直播间审核'],['买手带货','笔记审核'],['买手带货','账号违规'],['买手带货','买手拿样'],['买手带货','买手成长'],['买手带货','商家分销结算'],['买手带货','经营数据'],['买手带货','买手活动'],['买手带货','合作纠纷'],['买手带货','买手财务'],['买手合作','其他']];
@@ -91,7 +91,8 @@ const S = {
   forecastBuyer:{}, forecastBlogger:{},
   volumeForecast:{},
   forecastInputs:{},
-  forecastHolidays:new Set()
+  forecastHolidays:new Set(),
+  forecastWorkdays:new Set()
 };
 
 /* ==================== 格式化工具 ==================== */
@@ -127,6 +128,172 @@ const dateAdd = (d, delta) => { const t = Date.parse(d + 'T00:00:00Z') + delta *
 const wkStartDate = wk => dateAdd(WK_BASE_DATE, (wk - WK_BASE_NUM) * 7);
 const wkEndDate   = wk => dateAdd(wkStartDate(wk), 6);
 const weekdayOf   = d => d ? WEEKDAY_CN[new Date(d + 'T00:00:00Z').getUTCDay()] : '';
+
+/* ====================================================================
+   中国法定节假日 · 动态加载（自动更新）
+   数据源：NateScarlet/holiday-cn（每日自动抓取国务院公告）
+   ==================================================================== */
+const CN_HOLIDAY_API_BASE = 'https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master';
+const CN_HOLIDAY_CACHE_KEY = 'creator_cn_holiday_cache';
+const CN_HOLIDAY_CACHE_DAYS = 7;
+
+let _cnHolidayMap = null;
+let _cnHolidayVersion = '内置（未加载 API）';
+
+function loadHolidayCache() {
+  try {
+    const raw = localStorage.getItem(CN_HOLIDAY_CACHE_KEY);
+    if (!raw) return null;
+    const cache = JSON.parse(raw);
+    if (!cache.timestamp || !cache.data) return null;
+    const ageDays = (Date.now() - cache.timestamp) / 86400000;
+    if (ageDays > CN_HOLIDAY_CACHE_DAYS) return null;
+    return cache;
+  } catch (_) { return null; }
+}
+
+function buildHolidayMap(days) {
+  const map = {};
+  for (const d of days) {
+    if (!d.date) continue;
+    map[d.date] = d.isOffDay ? 'holiday' : 'workday';
+  }
+  return map;
+}
+
+async function loadHolidaysForYear(year) {
+  const url = CN_HOLIDAY_API_BASE + '/' + year + '.json';
+  try {
+    const resp = await fetch(url, { cache: 'no-cache' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const json = await resp.json();
+    return buildHolidayMap(json.days || []);
+  } catch (e) {
+    console.warn('[节假日API] ' + year + ' 年数据拉取失败：', e.message);
+    return null;
+  }
+}
+
+async function initHolidayData() {
+  const now = new Date();
+  const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
+  const result = {};
+
+  const cache = loadHolidayCache();
+  if (cache && cache.data) {
+    for (const y of years) {
+      if (cache.data[y]) result[y] = cache.data[y];
+    }
+  }
+
+  const missing = years.filter(y => !result[y]);
+  if (missing.length) {
+    const fetched = await Promise.all(missing.map(y => loadHolidaysForYear(y)));
+    missing.forEach((y, i) => {
+      if (fetched[i]) result[y] = fetched[i];
+    });
+  }
+
+  try {
+    localStorage.setItem(CN_HOLIDAY_CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      data: result,
+    }));
+  } catch (_) {}
+
+  _cnHolidayMap = {};
+  for (const y of years) {
+    if (result[y]) {
+      for (const d in result[y]) _cnHolidayMap[d] = result[y][d];
+    }
+  }
+
+  const total = Object.keys(_cnHolidayMap).length;
+  _cnHolidayVersion = total > 0
+    ? 'API（' + years.join('/') + '，共 ' + total + ' 条）'
+    : '内置（API 不可用）';
+
+  if (typeof renderForecastResult === 'function') {
+    try { renderForecastResult(); } catch (_) {}
+  }
+  if (typeof renderForecastConfig === 'function') {
+    try { renderForecastConfig(); } catch (_) {}
+  }
+}
+
+/* 内置兜底表（API 不可用时使用） */
+const CN_HOLIDAY_FALLBACK = {
+  '2025-01-01': 'holiday', '2025-01-26': 'workday',
+  '2025-01-28': 'holiday', '2025-01-29': 'holiday', '2025-01-30': 'holiday',
+  '2025-01-31': 'holiday', '2025-02-01': 'holiday', '2025-02-02': 'holiday',
+  '2025-02-03': 'holiday', '2025-02-04': 'holiday', '2025-02-08': 'workday',
+  '2025-04-04': 'holiday', '2025-04-05': 'holiday', '2025-04-06': 'holiday',
+  '2025-04-27': 'workday',
+  '2025-05-01': 'holiday', '2025-05-02': 'holiday', '2025-05-03': 'holiday',
+  '2025-05-04': 'holiday', '2025-05-05': 'holiday',
+  '2025-05-31': 'holiday', '2025-06-01': 'holiday', '2025-06-02': 'holiday',
+  '2025-09-28': 'workday',
+  '2025-10-01': 'holiday', '2025-10-02': 'holiday', '2025-10-03': 'holiday',
+  '2025-10-04': 'holiday', '2025-10-05': 'holiday', '2025-10-06': 'holiday',
+  '2025-10-07': 'holiday', '2025-10-08': 'holiday', '2025-10-11': 'workday',
+  '2026-01-01': 'holiday', '2026-01-02': 'holiday', '2026-01-03': 'holiday',
+  '2026-01-04': 'workday',
+  '2026-02-14': 'workday',
+  '2026-02-15': 'holiday', '2026-02-16': 'holiday', '2026-02-17': 'holiday',
+  '2026-02-18': 'holiday', '2026-02-19': 'holiday', '2026-02-20': 'holiday',
+  '2026-02-21': 'holiday', '2026-02-22': 'workday',
+  '2026-04-04': 'holiday', '2026-04-05': 'holiday', '2026-04-06': 'holiday',
+  '2026-05-01': 'holiday', '2026-05-02': 'holiday', '2026-05-03': 'holiday',
+  '2026-05-04': 'holiday', '2026-05-05': 'holiday',
+  '2026-06-19': 'holiday', '2026-06-20': 'holiday', '2026-06-21': 'holiday',
+  '2026-09-25': 'holiday', '2026-09-26': 'holiday', '2026-09-27': 'holiday',
+  '2026-10-01': 'holiday', '2026-10-02': 'holiday', '2026-10-03': 'holiday',
+  '2026-10-04': 'holiday', '2026-10-05': 'holiday', '2026-10-06': 'holiday',
+  '2026-10-07': 'holiday'
+};
+
+function getHolidayMap() {
+  if (_cnHolidayMap && Object.keys(_cnHolidayMap).length > 0) return _cnHolidayMap;
+  return CN_HOLIDAY_FALLBACK;
+}
+
+function classifyDate(date) {
+  if (!date) return 'weekday';
+  const map = getHolidayMap();
+  if (map[date] === 'holiday') return 'holiday';
+  if (map[date] === 'workday') return 'workday';
+  const wd = new Date(date + 'T00:00:00Z').getUTCDay();
+  if (wd === 0 || wd === 6) return 'weekend';
+  return 'weekday';
+}
+
+function shouldUseWeekendPattern(date) {
+  if (S.forecastHolidays && S.forecastHolidays.has(date)) return true;
+  if (S.forecastWorkdays && S.forecastWorkdays.has(date)) return false;
+  const cls = classifyDate(date);
+  return cls === 'holiday' || cls === 'weekend';
+}
+
+function dateTypeLabel(date) {
+  const auto = classifyDate(date);
+  const userHoliday = S.forecastHolidays && S.forecastHolidays.has(date);
+  const userWorkday = S.forecastWorkdays && S.forecastWorkdays.has(date);
+
+  if (userHoliday) {
+    if (auto === 'weekend') return '周末';
+    if (auto === 'holiday') return '节假日';
+    return '自定义休';
+  }
+  if (userWorkday) {
+    if (auto === 'workday') return '调休上班';
+    if (auto === 'holiday' || auto === 'weekend') return '自定义班';
+    return '工作日';
+  }
+  if (auto === 'holiday') return '节假日';
+  if (auto === 'workday') return '调休上班';
+  if (auto === 'weekend') return '周末';
+  return '工作日';
+}
 
 /* ==================== UI 辅助 ==================== */
 function getCheckedValues(selector) { const el = $(selector); if (!el) return []; return Array.from(el.querySelectorAll('.chip.on')).map(ch => ch.dataset.val); }
@@ -1002,7 +1169,6 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     }
     const d = dayMap.get(r.date);
 
-    // 取值：优先 metricKey 对应字段，其次 r.volume
     let rawMetric = null;
     if (metricKey === 'caseVolume' || metricKey === 'volume') rawMetric = r.volume;
     else rawMetric = r[metricKey];
@@ -1047,10 +1213,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     return emptyReturn();
   }
 
-  // ✅ 兜底：如果所有 volume 都是 0，则改用「明细行数」作为权重
   const useRowCount = (sumVolume <= 0);
-
-  // 用选定的权重重建每天的 periods / total
   for (const d of dayMap.values()) {
     if (useRowCount) {
       d.total = d.rowCount || 0;
@@ -1146,13 +1309,12 @@ function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTot
   for (let i = 0; i < days; i++) {
     const date = dateAdd(startDate, i);
     if (!date) continue;
-    const wd = new Date(date + 'T00:00:00Z').getUTCDay();
-    const isWeekend = (wd === 0 || wd === 6);
-    const isHoliday = holidays.has(date);
-    const share = (isHoliday || isWeekend) ? stats.weekend : stats.weekday;
-    const s30Rate = (isHoliday || isWeekend) ? stats.weekendS30 : stats.weekdayS30;
+    const useWeekend = shouldUseWeekendPattern(date);
+    const typeLabel = dateTypeLabel(date);
+    const share = useWeekend ? stats.weekend : stats.weekday;
+    const s30Rate = useWeekend ? stats.weekendS30 : stats.weekdayS30;
     const total = num(dailyTotals[date]);
-    const row = { date, isWeekend, isHoliday, total, periods: {}, s30Rate };
+    const row = { date, useWeekend, typeLabel, total, periods: {}, s30Rate };
     for (const p of periods) row.periods[p] = total * (share[p] || 0);
     results.push(row);
   }
@@ -1172,9 +1334,7 @@ function forecastToMarkdown(biz, metricKey, sampleWeeks, forecast) {
   lines.push('');
   const periodList = (forecast.periods && forecast.periods.length) ? forecast.periods : PREDICT_PERIODS;
   lines.push('| 时段 | ' + results.map(r => {
-    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
-    const tag = r.isHoliday ? '🎌' : (r.isWeekend ? '🌴' : '');
-    return r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + tag;
+    return r.date.slice(5) + ' ' + r.typeLabel;
   }).join(' | ') + ' |');
   lines.push('| --- |' + results.map(() => ' ---: |').join(''));
   for (const p of periodList) {
@@ -1209,7 +1369,7 @@ function buildForecastAiContext(biz, metricKey, sampleWeeks, startDate, days, da
   };
   const forecastRows = results.map(r => {
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
-    return { date: r.date, weekday: WEEKDAY_CN[wd], isWeekend: r.isWeekend, isHoliday: r.isHoliday, total: Math.round(r.total), periods: Object.fromEntries(periodList.map(p => [p, Math.round(r.periods[p] || 0)])) };
+    return { date: r.date, weekday: WEEKDAY_CN[wd], typeLabel: r.typeLabel, total: Math.round(r.total), periods: Object.fromEntries(periodList.map(p => [p, Math.round(r.periods[p] || 0)])) };
   });
   return { biz, metricKey, sampleWeeks, startDate, days, sampleRange: stats.sampleRange, weekdayCount: stats.weekdayCount, weekendCount: stats.weekendCount, periodList, avgShare, avgS30, abnormalDays: stats.abnormalDays, historyDetail, forecastRows, thresholds: { s30Rate: s30Threshold(biz) } };
 }
@@ -1250,9 +1410,8 @@ function formatForecastAiContext(ctx) {
   L.push('【未来预测（基于历史占比的原始计算值）】');
   L.push('  日期 | 类型 | 总量 | ' + ctx.periodList.map(p => p + '时').join(' | '));
   for (const r of ctx.forecastRows) {
-    const type = r.isHoliday ? '节假日' : (r.isWeekend ? '周末' : '工作日');
     const cells = ctx.periodList.map(p => r.periods[p] || 0);
-    L.push('  ' + r.date + '(' + r.weekday + ') | ' + type + ' | ' + r.total + ' | ' + cells.join(' | '));
+    L.push('  ' + r.date + '(' + r.weekday + ') | ' + r.typeLabel + ' | ' + r.total + ' | ' + cells.join(' | '));
   }
   L.push('');
   return L.join('\n');

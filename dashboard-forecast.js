@@ -17,6 +17,8 @@ function renderForecastConfig() {
 
   if (!S.forecastInputs) S.forecastInputs = {};
   if (!S.forecastInputs[biz]) S.forecastInputs[biz] = {};
+  if (!S.forecastHolidays) S.forecastHolidays = new Set();
+  if (!S.forecastWorkdays) S.forecastWorkdays = new Set();
 
   const volumeMap = S.volumeForecast[biz] || {};
   let hasAutoData = false;
@@ -26,28 +28,36 @@ function renderForecastConfig() {
     const date = dateAdd(startDate, i);
     if (!date) continue;
     const wd = new Date(date + 'T00:00:00Z').getUTCDay();
-    const isWeekend = (wd === 0 || wd === 6);
 
     let val = S.forecastInputs[biz][date];
     let isAuto = false;
     if (val === undefined || val === '') {
-      if (volumeMap[date] != null) {
-        val = volumeMap[date];
-        isAuto = true;
-        hasAutoData = true;
-      } else {
-        val = '';
-      }
+      if (volumeMap[date] != null) { val = volumeMap[date]; isAuto = true; hasAutoData = true; }
+      else { val = ''; }
     }
 
-    const rowClass = isWeekend ? 'fc-daily-row fc-weekend' : 'fc-daily-row';
-    const readonly = '';
+    const typeLabel = dateTypeLabel(date);
+    const checked = shouldUseWeekendPattern(date) ? ' checked' : '';
+    const typeColor = typeLabel === '节假日' ? '#E8A33E'
+                    : typeLabel === '调休上班' ? '#C75C5C'
+                    : typeLabel === '周末' ? '#C4B0CE'
+                    : typeLabel.indexOf('自定义') === 0 ? '#7B8FBF'
+                    : '#77778A';
+
+    const isWeekendRow = shouldUseWeekendPattern(date);
+    const rowClass = isWeekendRow ? 'fc-daily-row fc-weekend' : 'fc-daily-row';
     const autoTag = isAuto ? '<span class="fc-auto-tag">预测量</span>' : '';
 
     html += '<div class="' + rowClass + '" data-date="' + date + '">' +
-      '<div class="fc-daily-date">' + date.slice(5) + ' 周' + WEEKDAY_CN[wd] + autoTag + '</div>' +
-      '<input type="number" inputmode="decimal" step="1" min="0" value="' + esc(val) + '" ' + readonly + ' data-date="' + date + '" placeholder="输入总量">' +
-      '<label class="fc-holiday"><input type="checkbox" data-date="' + date + '"' + (S.forecastHolidays && S.forecastHolidays.has(date) ? ' checked' : '') + '> 节假日</label>' +
+      '<div class="fc-daily-date">' +
+        date.slice(5) + ' 周' + WEEKDAY_CN[wd] +
+        ' <span style="font-size:11px;color:' + typeColor + ';font-weight:600;margin-left:4px">[' + typeLabel + ']</span>' +
+        autoTag +
+      '</div>' +
+      '<input type="number" inputmode="decimal" step="1" min="0" value="' + esc(val) + '" data-date="' + date + '" placeholder="输入总量">' +
+      '<label class="fc-holiday" title="勾选 = 按周末/节假日模板计算；取消 = 按工作日模板计算">' +
+        '<input type="checkbox" data-date="' + date + '"' + checked + '> 按休日算' +
+      '</label>' +
     '</div>';
   }
 
@@ -57,7 +67,7 @@ function renderForecastConfig() {
   if (tipEl) {
     if (hasAutoData) {
       tipEl.style.display = 'block';
-      tipEl.innerHTML = '💡 检测到导入的「预测量」数据，已自动填充。带 <span class="fc-auto-tag">预测量</span> 标记的输入框可直接修改覆盖。';
+      tipEl.innerHTML = '💡 已自动填充导入的「预测量」数据（可覆盖）；节假日/周末已按中国法定节假日自动识别，可手动勾选/取消覆盖。';
     } else {
       tipEl.style.display = 'none';
     }
@@ -65,19 +75,25 @@ function renderForecastConfig() {
 
   grid.querySelectorAll('input[type=number]').forEach(inp => {
     inp.addEventListener('input', () => {
-      const d = inp.dataset.date;
-      S.forecastInputs[biz][d] = inp.value;
+      S.forecastInputs[biz][inp.dataset.date] = inp.value;
     });
   });
 
   grid.querySelectorAll('input[type=checkbox]').forEach(chk => {
     chk.addEventListener('change', () => {
       const d = chk.dataset.date;
-      if (!S.forecastHolidays) S.forecastHolidays = new Set();
-      if (chk.checked) S.forecastHolidays.add(d);
-      else S.forecastHolidays.delete(d);
-      try { localStorage.setItem('creator_forecast_holidays', JSON.stringify([...S.forecastHolidays])); } catch (_) {}
-      renderForecastResult();
+      if (chk.checked) {
+        S.forecastHolidays.add(d);
+        S.forecastWorkdays.delete(d);
+      } else {
+        S.forecastWorkdays.add(d);
+        S.forecastHolidays.delete(d);
+      }
+      try {
+        localStorage.setItem('creator_forecast_holidays', JSON.stringify([...S.forecastHolidays]));
+        localStorage.setItem('creator_forecast_workdays', JSON.stringify([...S.forecastWorkdays]));
+      } catch (_) {}
+      renderForecastConfig();
     });
   });
 
@@ -100,7 +116,7 @@ function collectDailyTotals() {
   return totals;
 }
 
-/* ==================== 渲染预测结果表格 ==================== */
+/* ==================== 渲染预测结果表格（时段为行 · 日期为列） ==================== */
 function renderForecastResult() {
   const el = $('#fcResult');
   const notesEl = $('#fcNotes');
@@ -161,47 +177,59 @@ function renderForecastResult() {
     return;
   }
 
-  let thead = '<tr><th>日期</th><th>类型</th><th>总量</th>';
-  for (const p of periodList) thead += '<th>' + esc(p) + '时</th>';
+  /* 双行表头：第一行=日期，第二行=类型 */
+  let thead = '<tr>';
+  thead += '<th rowspan="2" style="vertical-align:middle;min-width:70px">时段</th>';
+  for (const r of results) {
+    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
+    thead += '<th style="min-width:78px">' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + '</th>';
+  }
+  thead += '<th rowspan="2" style="vertical-align:middle;min-width:70px">合计</th>';
+  thead += '</tr>';
+
+  thead += '<tr>';
+  for (const r of results) {
+    const label = r.typeLabel || '';
+    const cls = label === '节假日' ? 'color:#E8A33E;'
+              : label === '调休上班' ? 'color:#C75C5C;'
+              : label === '周末' ? 'color:#C4B0CE;'
+              : label.indexOf('自定义') === 0 ? 'color:#7B8FBF;'
+              : 'color:#77778A;';
+    thead += '<th style="' + cls + 'font-weight:500;font-size:11px;padding-top:4px;padding-bottom:5px">' + label + '</th>';
+  }
   thead += '</tr>';
 
   let tbody = '';
-  for (const r of results) {
-    const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
-    const type = r.isHoliday ? '节假日' : (r.isWeekend ? '周末' : '工作日');
-    const typeCls = r.isHoliday ? 'style="color:#E8A33E;font-weight:600"' : (r.isWeekend ? 'style="color:#C4B0CE;font-weight:600"' : '');
-
+  for (const p of periodList) {
     tbody += '<tr>' +
-      '<td>' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + '</td>' +
-      '<td ' + typeCls + '>' + type + '</td>' +
-      '<td style="font-weight:600">' + Math.round(r.total) + '</td>';
-
-    for (const p of periodList) {
+      '<td style="font-weight:600;text-align:center;position:sticky;left:0;background:#FFFFFF;box-shadow:inset -1px 0 0 #F0EEE9">' + esc(p) + '时</td>';
+    let sum = 0;
+    for (const r of results) {
       const v = r.periods[p] || 0;
-      tbody += '<td>' + (r.total > 0 ? Math.round(v) : '—') + '</td>';
+      sum += v;
+      tbody += '<td style="text-align:center">' + (r.total > 0 ? Math.round(v) : '—') + '</td>';
     }
+    tbody += '<td style="font-weight:600;text-align:center;background:#F4F3EF">' + Math.round(sum) + '</td>';
     tbody += '</tr>';
   }
 
-  let totalRow = '<tr style="background:#F4F3EF;font-weight:600"><td>合计</td><td>—</td><td>' +
-    Math.round(results.reduce((s, r) => s + r.total, 0)) + '</td>';
-  for (const p of periodList) {
-    const sum = results.reduce((s, r) => s + (r.periods[p] || 0), 0);
-    totalRow += '<td>' + Math.round(sum) + '</td>';
+  tbody += '<tr style="background:#F4F3EF;font-weight:600">' +
+    '<td style="text-align:center;position:sticky;left:0;background:#F4F3EF;box-shadow:inset -1px 0 0 #E7E5DE">总量</td>';
+  for (const r of results) {
+    tbody += '<td style="text-align:center">' + Math.round(r.total) + '</td>';
   }
-  totalRow += '</tr>';
+  tbody += '<td style="text-align:center;background:#E8EDF3">' + Math.round(results.reduce((s, r) => s + r.total, 0)) + '</td></tr>';
 
-  el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + totalRow + '</tbody></table></div>';
+  el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table></div>';
 
   if (notesEl) {
     const weightTag = stats.usedRowCount
       ? '（⚠ 未检测到「CASE处理量」，已改用明细行数作为权重）'
       : '（按 CASE 处理量加权）';
     let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + ' ' + weightTag + '。</div>';
+    noteHtml += '<div style="color:#77778A;font-size:11.5px">🗓 节假日识别：' + _cnHolidayVersion + '；勾选/取消「按休日算」可手动覆盖。</div>';
     if (stats.abnormalDays && stats.abnormalDays.length) {
-      noteHtml += '<div style="color:#C98383">⚠ <b>疑似异常天：</b>' + stats.abnormalDays.map(d => d.date + '（偏差' + d.totalDevPct + '%）').join('、') + '，已在计算中位数时排除。</div>';
-    } else {
-      noteHtml += '<div style="color:#6EA980">✓ 未检出显著异常天。</div>';
+      noteHtml += '<div style="color:#C98383;margin-top:4px">⚠ <b>疑似异常天：</b>' + stats.abnormalDays.map(d => d.date + '（偏差' + d.totalDevPct + '%）').join('、') + '。</div>';
     }
     notesEl.innerHTML = noteHtml;
   }
@@ -362,16 +390,44 @@ function clearForecastInputs() {
   if (S.forecastInputs && S.forecastInputs[biz]) {
     S.forecastInputs[biz] = {};
   }
-  if (S.forecastHolidays) {
-    S.forecastHolidays.clear();
-  }
-  try { localStorage.removeItem('creator_forecast_holidays'); } catch (_) {}
+  if (S.forecastHolidays) S.forecastHolidays.clear();
+  if (S.forecastWorkdays) S.forecastWorkdays.clear();
+  try {
+    localStorage.removeItem('creator_forecast_holidays');
+    localStorage.removeItem('creator_forecast_workdays');
+  } catch (_) {}
   const outEl = $('#fcAiOut');
   if (outEl) { outEl.style.display = 'none'; outEl.innerHTML = ''; }
   renderForecastConfig();
   renderForecastResult();
-  toast('已清空输入');
+  toast('已清空输入与手动覆盖的节假日');
 }
+
+/* ==================== 启动时加载节假日数据 ==================== */
+(function bootstrapHoliday() {
+  const run = () => {
+    // 先从 localStorage 恢复用户手动覆盖
+    try {
+      if (!S.forecastHolidays) S.forecastHolidays = new Set();
+      if (!S.forecastWorkdays) S.forecastWorkdays = new Set();
+      JSON.parse(localStorage.getItem('creator_forecast_holidays') || '[]')
+        .forEach(d => S.forecastHolidays.add(d));
+      JSON.parse(localStorage.getItem('creator_forecast_workdays') || '[]')
+        .forEach(d => S.forecastWorkdays.add(d));
+    } catch (_) {}
+
+    if (typeof initHolidayData === 'function') {
+      initHolidayData().catch(err => {
+        console.warn('[节假日API] 初始化失败：', err);
+      });
+    }
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run);
+  } else {
+    run();
+  }
+})();
 
 /* ============================================================
    END OF dashboard-forecast.js
