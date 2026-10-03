@@ -413,8 +413,8 @@ function s30AnalysisHTML(biz, wk, prevWk) {
         const dayDisp = (x.dayImpact >= 0 ? '+' : '') + (x.dayImpact * 100).toFixed(2) + 'pp';
         const weekDisp = (x.weekImpact >= 0 ? '+' : '') + (x.weekImpact * 100).toFixed(2) + 'pp';
         return '<tr>' +
-          '<td style="text-align:center">' + (i + 1) + '</td>' +
-          '<td>' + esc(x.date.slice(5)) + ' ' + esc(x.period) + '时</td>' +
+          '<td class="c-rank">' + (i + 1) + '</td>' +
+          '<td class="c-fix">' + esc(x.date.slice(5)) + ' ' + esc(x.period) + '时</td>' +
           '<td style="text-align:center">' + Math.round(x.forecast) + '</td>' +
           '<td style="text-align:center">' + Math.round(x.den) + '</td>' +
           '<td style="text-align:center">' + (x.bias * 100).toFixed(1) + '%</td>' +
@@ -424,8 +424,8 @@ function s30AnalysisHTML(biz, wk, prevWk) {
           '<td style="text-align:center;color:' + weekColor + ';font-weight:600">' + weekDisp + '</td>' +
         '</tr>';
       }).join('');
-      P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
-        '<th>排名</th><th>日期 × 时段</th><th>预测量</th><th>实际量</th><th>超预测率</th><th>Miss</th><th>时段接起率</th><th>日度影响值</th><th>周度影响值</th>' +
+      P.push('<div class="table-scroll-x"><table class="rp-table rp-sticky2"><thead><tr>' +
+        '<th class="c-rank">排名</th><th class="c-fix">日期 × 时段</th><th>预测量</th><th>实际量</th><th>超预测率</th><th>Miss</th><th>时段接起率</th><th>日度影响值</th><th>周度影响值</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>');
 
       const totalMissAll = impacts.reduce((s, x) => s + x.miss, 0);
@@ -496,15 +496,15 @@ function s30AnalysisHTML(biz, wk, prevWk) {
       const color = e.rate >= th ? '#6EA980' : '#D9363E';
       const weight = e.rate >= th ? '400' : '600';
       return '<tr>' +
-        '<td style="text-align:center">' + (i + 1) + '</td>' +
-        '<td>' + esc(e.name) + ' <span style="color:#A0A0AE;font-size:11px">' + esc(grp) + '</span></td>' +
+        '<td class="c-rank">' + (i + 1) + '</td>' +
+        '<td class="c-fix">' + esc(e.name) + ' <span style="color:#A0A0AE;font-size:11px">' + esc(grp) + '</span></td>' +
         '<td style="text-align:center">' + fmtInt(e.den) + '</td>' +
         '<td style="text-align:center">' + fmtInt(e.miss) + '</td>' +
         '<td style="text-align:center;color:' + color + ';font-weight:' + weight + '">' + (e.rate * 100).toFixed(2) + '%</td>' +
       '</tr>';
     }).join('');
-    P.push('<div class="table-scroll-x"><table class="rp-table"><thead><tr>' +
-      '<th>排名</th><th>员工</th><th>人工服务量</th><th>Miss 量</th><th>接起率</th>' +
+    P.push('<div class="table-scroll-x"><table class="rp-table rp-sticky2"><thead><tr>' +
+      '<th class="c-rank">排名</th><th class="c-fix">员工</th><th>人工服务量</th><th>Miss 量</th><th>接起率</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>');
     P.push('<div class="rpt-sub">→ TOP5 员工贡献了 <b>' + top5Pct + '%</b> 的 Miss 量（' + top5Miss + '/' + totalMiss + ' 单）。</div>');
     const lowEmps = cur.emps.filter(e => e.den >= 30 && e.rate < th).sort((a, b) => a.rate - b.rate).slice(0, 5);

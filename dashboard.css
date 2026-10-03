@@ -305,6 +305,40 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 .table-scroll-x .rp-table thead th:first-child { position: sticky; left: 0; z-index: 6; background: #F4F3EF; box-shadow: inset -1px 0 0 #E7E5DE; }
 .table-scroll-x .rp-table tbody td:first-child { position: sticky; left: 0; z-index: 2; background: #FFFFFF; box-shadow: inset -1px 0 0 #F0EEE9; }
 
+/* ===== 周报：排名列收窄 + 主信息列冻结（日期×时段 / 员工） ===== */
+.table-scroll-x .rp-table.rp-sticky2 thead th.c-rank,
+.table-scroll-x .rp-table.rp-sticky2 tbody td.c-rank {
+  width: 46px; min-width: 46px; max-width: 46px;
+  text-align: center;
+  padding-left: 4px; padding-right: 4px;
+  position: sticky; left: 0;
+  background: #F4F3EF;
+  box-shadow: inset -1px 0 0 #E7E5DE;
+  z-index: 7;
+}
+.table-scroll-x .rp-table.rp-sticky2 tbody td.c-rank {
+  background: #FFFFFF;
+  box-shadow: inset -1px 0 0 #F0EEE9;
+  z-index: 3;
+}
+
+.table-scroll-x .rp-table.rp-sticky2 thead th.c-fix,
+.table-scroll-x .rp-table.rp-sticky2 tbody td.c-fix {
+  position: sticky; left: 46px;
+  background: #F4F3EF;
+  box-shadow: inset -1px 0 0 #E7E5DE;
+  min-width: 110px; max-width: 130px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  z-index: 6;
+}
+.table-scroll-x .rp-table.rp-sticky2 tbody td.c-fix {
+  background: #FFFFFF;
+  box-shadow: inset -1px 0 0 #F0EEE9;
+  z-index: 2;
+}
+
 /* 花名册 */
 .roster-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .roster-toolbar input {
@@ -688,6 +722,12 @@ tbody tr:active td:first-child { background: #FAFAF7; }
 .ai-key-state.no   { background: #F5E5E5; color: #C98383; }
 .ai-key-state.wait { background: var(--tap); color: var(--text-3); }
 
+/* 30S 月份折叠头（可选 hover 增强） */
+.s30-month-head { transition: background .15s ease; }
+.s30-month-head:hover { background:#EDEBE6; }
+.s30-month-head .btn-mini { transition: all .15s ease; }
+.s30-month-head .btn-mini:hover { color:#7B8FBF; border-color:#B8CBEA; }
+
 /* ==================== 响应式 ==================== */
 @media (min-width: 600px) {
   .summary-grid { grid-template-columns: repeat(3, 1fr); }
@@ -784,6 +824,10 @@ tbody tr:active td:first-child { background: #FAFAF7; }
   .fc-config { grid-template-columns: 1fr; }
   .fc-daily-row { flex-wrap: wrap; }
   .fc-daily-date { width: 100%; }
+  .table-scroll-x .rp-table.rp-sticky2 thead th.c-rank,
+  .table-scroll-x .rp-table.rp-sticky2 tbody td.c-rank { width: 40px; min-width: 40px; max-width: 40px; }
+  .table-scroll-x .rp-table.rp-sticky2 thead th.c-fix,
+  .table-scroll-x .rp-table.rp-sticky2 tbody td.c-fix { left: 40px; min-width: 96px; max-width: 110px; }
 }
 
 @media print {
