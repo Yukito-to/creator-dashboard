@@ -983,6 +983,8 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   const dayMap = new Map();
   const periodSet = new Set();
   let scanned = 0;
+  let sumVolume = 0;
+  let rowsWithPeriod = 0;
 
   for (const r of S.records) {
     if (r.biz !== biz) continue;
@@ -992,14 +994,26 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     if (!pRaw) continue;
     const p = normPeriod(pRaw);
     if (!p) continue;
+    rowsWithPeriod++;
+
     periodSet.add(p);
-    if (!dayMap.has(r.date)) dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {} });
+    if (!dayMap.has(r.date)) {
+      dayMap.set(r.date, { date: r.date, total: 0, periods: {}, s30: {}, rowCount: 0, periodRowCount: {} });
+    }
     const d = dayMap.get(r.date);
-    // ✅ 修复：兼容 metricKey='caseVolume' → 实际字段 r.volume
-    const rawMetric = (metricKey === 'caseVolume') ? r.volume : r[metricKey];
+
+    // 取值：优先 metricKey 对应字段，其次 r.volume
+    let rawMetric = null;
+    if (metricKey === 'caseVolume' || metricKey === 'volume') rawMetric = r.volume;
+    else rawMetric = r[metricKey];
     const v = num(rawMetric);
+    sumVolume += v;
+
     d.periods[p] = (d.periods[p] || 0) + v;
     d.total += v;
+    d.rowCount = (d.rowCount || 0) + 1;
+    d.periodRowCount[p] = (d.periodRowCount[p] || 0) + 1;
+
     if (!d.s30[p]) d.s30[p] = { num: 0, den: 0 };
     d.s30[p].num += num(r.s30Num) || 0;
     d.s30[p].den += num(r.s30Den) || 0;
@@ -1011,6 +1025,8 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     matchedDays: dayMap.size,
     periodsDetected: sortedPeriods,
     sampleRange: { start: startDate, end: latest },
+    sumVolume,
+    rowsWithPeriod,
   };
 
   const emptyReturn = () => ({
@@ -1022,13 +1038,24 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
 
   if (!scanned) {
     diagnostic.reason = 'no-records-in-range';
-    diagnostic.hint = '在样本周期 ' + startDate + ' ~ ' + latest + ' 内，业务线「' + biz + '」没有任何数据行。请检查导入的 CASE 日期范围是否覆盖该区间。';
+    diagnostic.hint = '在样本周期 ' + startDate + ' ~ ' + latest + ' 内，业务线「' + biz + '」没有任何数据行。';
     return emptyReturn();
   }
   if (!dayMap.size) {
     diagnostic.reason = 'no-period-data';
-    diagnostic.hint = '数据行有日期，但「CASE创建时段」字段全为空，无法做时段拆分。请到「🔗 映射」页检查该字段是否已正确映射。';
+    diagnostic.hint = '数据行有日期，但「CASE创建时段」字段全为空。请到「🔗 映射」页检查该字段是否已正确映射。';
     return emptyReturn();
+  }
+
+  // ✅ 兜底：如果所有 volume 都是 0，则改用「明细行数」作为权重
+  const useRowCount = (sumVolume <= 0);
+
+  // 用选定的权重重建每天的 periods / total
+  for (const d of dayMap.values()) {
+    if (useRowCount) {
+      d.total = d.rowCount || 0;
+      d.periods = Object.assign({}, d.periodRowCount || {});
+    }
   }
 
   const groups = { weekday: {}, weekend: {} };
@@ -1055,10 +1082,9 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     dailyStats.push({ date: d.date, total: d.total, isWeekend, periods: Object.assign({}, d.periods), s30: Object.assign({}, d.s30) });
   }
 
-  // ✅ 修复：如果 dayMap 有数据但 dailyStats 仍为空 → 明确诊断是"volume 全为 0"
   if (!dailyStats.length) {
-    diagnostic.reason = 'zero-volume';
-    diagnostic.hint = '检测到 ' + dayMap.size + ' 天有数据、时段字段也正常，但这些天的 CASE 处理量（volume）合计为 0。请到「🔗 映射」页确认「人工服务量」字段是否指向了正确的列。';
+    diagnostic.reason = 'zero-volume-and-zero-rows';
+    diagnostic.hint = '检测到 ' + dayMap.size + ' 天有数据，但既没有 CASE 处理量、也没有有效明细行。';
     return emptyReturn();
   }
 
@@ -1109,6 +1135,7 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     dailyStats, abnormalDays,
     periods: sortedPeriods,
     diagnostic,
+    usedRowCount: useRowCount,
   };
 }
 function generateForecast(biz, metricKey, sampleWeeks, startDate, days, dailyTotals, holidays) {

@@ -152,6 +152,8 @@ function renderForecastResult() {
       '<div>扫描数据行：<b>' + (diag.scanned || 0) + '</b> 条（样本周期 ' +
         (diag.sampleRange ? diag.sampleRange.start + ' ~ ' + diag.sampleRange.end : '—') + '）</div>' +
       '<div>有效天数：<b>' + (diag.matchedDays || 0) + '</b> 天</div>' +
+      '<div>时段行数：<b>' + (diag.rowsWithPeriod || 0) + '</b> 条（含时段的明细）</div>' +
+      '<div>CASE 处理量合计：<b>' + (diag.sumVolume || 0) + '</b></div>' +
       '<div>检测到的时段：<b>' + periodDisp + '</b></div>' +
       (diag.hint ? '<div style="margin-top:8px;color:#B36A00">' + esc(diag.hint) + '</div>' : '') +
       '</div>';
@@ -192,7 +194,10 @@ function renderForecastResult() {
   el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + totalRow + '</tbody></table></div>';
 
   if (notesEl) {
-    let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + '。</div>';
+    const weightTag = stats.usedRowCount
+      ? '（⚠ 未检测到「CASE处理量」，已改用明细行数作为权重）'
+      : '（按 CASE 处理量加权）';
+    let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + ' ' + weightTag + '。</div>';
     if (stats.abnormalDays && stats.abnormalDays.length) {
       noteHtml += '<div style="color:#C98383">⚠ <b>疑似异常天：</b>' + stats.abnormalDays.map(d => d.date + '（偏差' + d.totalDevPct + '%）').join('、') + '，已在计算中位数时排除。</div>';
     } else {
