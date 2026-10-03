@@ -159,50 +159,55 @@ function renderForecastResult() {
   const diag = stats.diagnostic || {};
 
   if (!stats.dailyStats || stats.dailyStats.length === 0) {
-    const periodDisp = (diag.periodsDetected && diag.periodsDetected.length)
+    const detected = (diag.periodsDetected && diag.periodsDetected.length)
       ? diag.periodsDetected.join('、')
+      : '（无）';
+    const used = (diag.periodsUsed && diag.periodsUsed.length)
+      ? diag.periodsUsed.join('、')
       : '（无）';
     el.innerHTML =
       '<div style="padding:14px 16px;background:#FFF7E6;border-radius:10px;border-left:3px solid #E8A33E;line-height:1.9;font-size:13px">' +
-      '<div style="font-weight:700;color:#B36A00;margin-bottom:6px">⚠ 未能从历史数据中提取时段占比</div>' +
+      '<div style="font-weight:700;color:#B36A00;margin-bottom:6px">⚠ 未能从历史数据中提取 9-23 时段占比</div>' +
       '<div>扫描数据行：<b>' + (diag.scanned || 0) + '</b> 条（样本周期 ' +
         (diag.sampleRange ? diag.sampleRange.start + ' ~ ' + diag.sampleRange.end : '—') + '）</div>' +
       '<div>有效天数：<b>' + (diag.matchedDays || 0) + '</b> 天</div>' +
-      '<div>时段行数：<b>' + (diag.rowsWithPeriod || 0) + '</b> 条（含时段的明细）</div>' +
-      '<div>CASE 处理量合计：<b>' + (diag.sumVolume || 0) + '</b></div>' +
-      '<div>检测到的时段：<b>' + periodDisp + '</b></div>' +
+      '<div>含时段的明细行：<b>' + (diag.rowsWithPeriod || 0) + '</b> 条，其中落在 9-23 范围内：<b>' + (diag.rowsInRange || 0) + '</b> 条</div>' +
+      '<div>CASE 处理量合计（仅 9-23）：<b>' + (diag.sumVolume || 0) + '</b></div>' +
+      '<div>全部检测到的时段：<b>' + detected + '</b></div>' +
+      '<div>用于计算的时段：<b>' + used + '</b></div>' +
       (diag.hint ? '<div style="margin-top:8px;color:#B36A00">' + esc(diag.hint) + '</div>' : '') +
       '</div>';
     if (notesEl) notesEl.innerHTML = '';
     return;
   }
 
-  /* 双行表头：第一行=日期，第二行=类型 */
+  /* ---- 双行表头：第一行=日期，第二行=类型；全部居中 ---- */
   let thead = '<tr>';
-  thead += '<th rowspan="2" style="vertical-align:middle;min-width:70px">时段</th>';
+  thead += '<th rowspan="2" style="vertical-align:middle;text-align:center;min-width:70px">时段</th>';
   for (const r of results) {
     const wd = new Date(r.date + 'T00:00:00Z').getUTCDay();
-    thead += '<th style="min-width:78px">' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + '</th>';
+    thead += '<th style="text-align:center;min-width:78px">' + r.date.slice(5) + ' 周' + WEEKDAY_CN[wd] + '</th>';
   }
-  thead += '<th rowspan="2" style="vertical-align:middle;min-width:70px">合计</th>';
+  thead += '<th rowspan="2" style="vertical-align:middle;text-align:center;min-width:70px">合计</th>';
   thead += '</tr>';
 
   thead += '<tr>';
   for (const r of results) {
     const label = r.typeLabel || '';
-    const cls = label === '节假日' ? 'color:#E8A33E;'
-              : label === '调休上班' ? 'color:#C75C5C;'
-              : label === '周末' ? 'color:#C4B0CE;'
-              : label.indexOf('自定义') === 0 ? 'color:#7B8FBF;'
-              : 'color:#77778A;';
-    thead += '<th style="' + cls + 'font-weight:500;font-size:11px;padding-top:4px;padding-bottom:5px">' + label + '</th>';
+    const color = label === '节假日' ? '#E8A33E'
+                : label === '调休上班' ? '#C75C5C'
+                : label === '周末' ? '#C4B0CE'
+                : label.indexOf('自定义') === 0 ? '#7B8FBF'
+                : '#77778A';
+    thead += '<th style="text-align:center;vertical-align:middle;color:' + color + ';font-weight:500;font-size:11px;padding-top:4px;padding-bottom:5px">' + label + '</th>';
   }
   thead += '</tr>';
 
+  /* ---- 表体：每行一个时段 ---- */
   let tbody = '';
   for (const p of periodList) {
     tbody += '<tr>' +
-      '<td style="font-weight:600;text-align:center;position:sticky;left:0;background:#FFFFFF;box-shadow:inset -1px 0 0 #F0EEE9">' + esc(p) + '时</td>';
+      '<td style="font-weight:600;text-align:center;vertical-align:middle;position:sticky;left:0;background:#FFFFFF;box-shadow:inset -1px 0 0 #F0EEE9">' + esc(p) + '时</td>';
     let sum = 0;
     for (const r of results) {
       const v = r.periods[p] || 0;
@@ -213,6 +218,7 @@ function renderForecastResult() {
     tbody += '</tr>';
   }
 
+  /* ---- 底部总量行 ---- */
   tbody += '<tr style="background:#F4F3EF;font-weight:600">' +
     '<td style="text-align:center;position:sticky;left:0;background:#F4F3EF;box-shadow:inset -1px 0 0 #E7E5DE">总量</td>';
   for (const r of results) {
@@ -222,12 +228,13 @@ function renderForecastResult() {
 
   el.innerHTML = '<div class="table-scroll-x"><table class="rp-table"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table></div>';
 
+  /* ---- 备注 ---- */
   if (notesEl) {
     const weightTag = stats.usedRowCount
       ? '（⚠ 未检测到「CASE处理量」，已改用明细行数作为权重）'
       : '（按 CASE 处理量加权）';
     let noteHtml = '<div style="margin-bottom:6px">📊 <b>样本统计：</b>近 ' + sampleWeeks + ' 周，工作日 ' + stats.weekdayCount + ' 天 / 周末 ' + stats.weekendCount + ' 天，样本范围 ' + stats.sampleRange.start + ' ~ ' + stats.sampleRange.end + ' ' + weightTag + '。</div>';
-    noteHtml += '<div style="color:#77778A;font-size:11.5px">🗓 节假日识别：' + _cnHolidayVersion + '；勾选/取消「按休日算」可手动覆盖。</div>';
+    noteHtml += '<div style="color:#77778A;font-size:11.5px">🗓 节假日识别：' + _cnHolidayVersion + '；时段仅统计 9-23；勾选/取消「按休日算」可手动覆盖。</div>';
     if (stats.abnormalDays && stats.abnormalDays.length) {
       noteHtml += '<div style="color:#C98383;margin-top:4px">⚠ <b>疑似异常天：</b>' + stats.abnormalDays.map(d => d.date + '（偏差' + d.totalDevPct + '%）').join('、') + '。</div>';
     }

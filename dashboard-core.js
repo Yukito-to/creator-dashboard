@@ -1148,10 +1148,12 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   if (!latest) return null;
   const startDate = dateAdd(latest, -(sampleWeeks * 7 - 1));
   const dayMap = new Map();
-  const periodSet = new Set();
+  const periodSet = new Set();       // 只保留 9-23
+  const allPeriodsSet = new Set();   // 诊断用，记录所有检测到的时段
   let scanned = 0;
   let sumVolume = 0;
   let rowsWithPeriod = 0;
+  let rowsInRange = 0;
 
   for (const r of S.records) {
     if (r.biz !== biz) continue;
@@ -1162,6 +1164,11 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
     const p = normPeriod(pRaw);
     if (!p) continue;
     rowsWithPeriod++;
+    allPeriodsSet.add(p);
+
+    // ✅ 只统计 9-23 时段
+    if (!isPredictPeriod(p)) continue;
+    rowsInRange++;
 
     periodSet.add(p);
     if (!dayMap.has(r.date)) {
@@ -1186,13 +1193,16 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   }
 
   const sortedPeriods = Array.from(periodSet).sort((a, b) => periodSortKey(a) - periodSortKey(b));
+  const allPeriodsSorted = Array.from(allPeriodsSet).sort((a, b) => periodSortKey(a) - periodSortKey(b));
   const diagnostic = {
     scanned,
     matchedDays: dayMap.size,
-    periodsDetected: sortedPeriods,
+    periodsDetected: allPeriodsSorted,
+    periodsUsed: sortedPeriods,
     sampleRange: { start: startDate, end: latest },
     sumVolume,
     rowsWithPeriod,
+    rowsInRange,
   };
 
   const emptyReturn = () => ({
@@ -1209,7 +1219,11 @@ function calcPeriodStats(biz, metricKey, sampleWeeks, refDate) {
   }
   if (!dayMap.size) {
     diagnostic.reason = 'no-period-data';
-    diagnostic.hint = '数据行有日期，但「CASE创建时段」字段全为空。请到「🔗 映射」页检查该字段是否已正确映射。';
+    if (rowsWithPeriod > 0 && rowsInRange === 0) {
+      diagnostic.hint = '数据里所有时段都不在 9-23 范围内（检测到：' + allPeriodsSorted.join('、') + '）。';
+    } else {
+      diagnostic.hint = '数据行有日期，但「CASE创建时段」字段全为空或都超出 9-23 范围。请到「🔗 映射」页检查该字段是否已正确映射。';
+    }
     return emptyReturn();
   }
 
