@@ -1691,15 +1691,21 @@ async function callZhipuAI(apiKey, model, messages, onChunk, signal, onDebug) {
   if (onDebug) onDebug('流结束（未收到 DONE）：原始行数=' + rawLines + '，data 行数=' + dataLines + '，内容 chunk 数=' + chunkCount);
 }
 
-/* 月度上下文：月汇总 + 本月各周趋势 */
-function buildMonthContext(biz, wk) {
+/* ==================== 月度上下文（按 focus 精简字段） ==================== */
+function buildMonthContext(biz, wk, focus) {
+  focus = focus || '综合';
   const src = bizToSrc(biz);
   const month = S.month;
   if (!month) return null;
 
+  const needAll     = (focus === '综合' || focus === '对比');
+  const needAHT     = (focus === 'AHT' || focus === '综合' || focus === '对比');
+  const needQuality = (focus === '质量' || focus === '综合' || focus === '对比');
+  const need30S     = (focus === '30S' || focus === '综合' || focus === '对比');
+
   const monthSet = new Set([month]);
   const mCur = calcBySrc(src, { monthSet });
-  const mS30 = calcByL1(biz, { monthSet });
+  const mS30 = need30S ? calcByL1(biz, { monthSet }) : null;
 
   const allW = allWeeks();
   const monthWeeks = allW.filter(w => {
@@ -1709,34 +1715,40 @@ function buildMonthContext(biz, wk) {
 
   const weekTrend = monthWeeks.map(w => {
     const c = calcBySrc(src, { wkSet: new Set([w]) });
-    const s30 = calcByL1(biz, { wkSet: new Set([w]) });
-    return {
-      wk: w,
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, utilization: c.utilization,
-      solveRate: c.solveRate, satisfaction: c.satisfaction,
-      qualityPassRate: c.qualityPassRate,
-      s30Rate: s30.s30Rate, s30Num: s30.s30Num,
-      s30Den: s30.s30Den, s30Miss: s30.s30Miss,
-    };
+    const row = { wk: w, caseVolume: c.caseVolume };
+    if (needAHT) {
+      row.cpd = c.cpd; row.aht = c.aht;
+      row.concurrency = c.concurrency; row.utilization = c.utilization;
+    }
+    if (needQuality) {
+      row.solveRate = c.solveRate; row.satisfaction = c.satisfaction;
+      row.qualityPassRate = c.qualityPassRate;
+    }
+    if (need30S) {
+      const s30 = calcByL1(biz, { wkSet: new Set([w]) });
+      row.s30Rate = s30.s30Rate; row.s30Num = s30.s30Num;
+      row.s30Den = s30.s30Den; row.s30Miss = s30.s30Miss;
+    }
+    return row;
   });
 
   const srcEmps = srcEmployeeSet(src);
   const allEmps = S.roster.filter(e => employeeVisible(e) && srcEmps.has(e.name));
+
   const monthByCat = {};
   for (const cat of ['首月','次月','老人']) {
     const names = allEmps.filter(e => (categoryOf(e, month) || '').includes(cat)).map(e => e.name);
     if (!names.length) continue;
     const nameSet = new Set(names);
     const c = calcBySrc(src, { nameSet, monthSet });
-    const s30 = calcByL1(biz, { nameSet, monthSet });
-    monthByCat[cat] = {
-      count: names.length,
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, solveRate: c.solveRate,
-      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
-      s30Rate: s30.s30Rate, s30Num: s30.s30Num, s30Den: s30.s30Den,
-    };
+    const row = { count: names.length, caseVolume: c.caseVolume };
+    if (needAHT) { row.cpd = c.cpd; row.aht = c.aht; row.concurrency = c.concurrency; }
+    if (needQuality) { row.solveRate = c.solveRate; row.satisfaction = c.satisfaction; row.qualityPassRate = c.qualityPassRate; }
+    if (need30S) {
+      const s30 = calcByL1(biz, { nameSet, monthSet });
+      row.s30Rate = s30.s30Rate; row.s30Num = s30.s30Num; row.s30Den = s30.s30Den;
+    }
+    monthByCat[cat] = row;
   }
 
   const groupMap = {};
@@ -1744,81 +1756,101 @@ function buildMonthContext(biz, wk) {
   const monthGroups = Object.keys(groupMap).sort().map(g => {
     const nameSet = new Set(groupMap[g]);
     const c = calcBySrc(src, { nameSet, monthSet });
-    const s30 = calcByL1(biz, { nameSet, monthSet });
-    return {
-      name: g, count: nameSet.size,
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, solveRate: c.solveRate,
-      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
-      s30Rate: s30.s30Rate,
-    };
+    const row = { name: g, count: nameSet.size, caseVolume: c.caseVolume };
+    if (needAHT) { row.cpd = c.cpd; row.aht = c.aht; row.concurrency = c.concurrency; }
+    if (needQuality) { row.solveRate = c.solveRate; row.satisfaction = c.satisfaction; row.qualityPassRate = c.qualityPassRate; }
+    if (need30S) {
+      const s30 = calcByL1(biz, { nameSet, monthSet });
+      row.s30Rate = s30.s30Rate;
+    }
+    return row;
   }).filter(g => g.caseVolume > 0);
 
-  const monthDaySet = new Set();
-  for (const r of S.records) {
-    if (r.biz === biz && r.month === month) monthDaySet.add(r.date);
+  let monthDayRates = [];
+  if (need30S) {
+    const monthDaySet = new Set();
+    for (const r of S.records) {
+      if (r.biz === biz && r.month === month) monthDaySet.add(r.date);
+    }
+    for (const d of Array.from(monthDaySet).sort()) {
+      const recs = S.records.filter(r => r.biz === biz && r.date === d);
+      let n = 0, den = 0;
+      for (const r of recs) { n += r.s30Num; den += r.s30Den; }
+      if (den <= 0) continue;
+      monthDayRates.push({ date: d, rate: n / den, num: n, den: den, miss: den - n });
+    }
   }
-  const monthDayRates = [];
-  for (const d of Array.from(monthDaySet).sort()) {
-    const recs = S.records.filter(r => r.biz === biz && r.date === d);
-    let n = 0, den = 0;
-    for (const r of recs) { n += r.s30Num; den += r.s30Den; }
-    if (den <= 0) continue;
-    monthDayRates.push({ date: d, rate: n / den, num: n, den: den, miss: den - n });
+
+  const summary = { caseVolume: mCur.caseVolume };
+  if (needAHT) {
+    summary.cpd = mCur.cpd; summary.aht = mCur.aht;
+    summary.concurrency = mCur.concurrency; summary.utilization = mCur.utilization;
+  }
+  if (needQuality) {
+    summary.solveRate = mCur.solveRate;
+    summary.satisfaction = mCur.satisfaction;
+    summary.qualityPassRate = mCur.qualityPassRate;
+  }
+  if (need30S && mS30) {
+    summary.s30Rate = mS30.s30Rate; summary.s30Num = mS30.s30Num;
+    summary.s30Den = mS30.s30Den; summary.s30Miss = mS30.s30Miss;
   }
 
   return {
     month, monthLabel: parseInt(month.slice(5,7),10) + '月',
-    summary: {
-      caseVolume: mCur.caseVolume, cpd: mCur.cpd, aht: mCur.aht,
-      concurrency: mCur.concurrency, utilization: mCur.utilization,
-      solveRate: mCur.solveRate, satisfaction: mCur.satisfaction,
-      qualityPassRate: mCur.qualityPassRate,
-      s30Rate: mS30.s30Rate, s30Num: mS30.s30Num,
-      s30Den: mS30.s30Den, s30Miss: mS30.s30Miss,
-    },
+    summary,
     weekTrend, byCat: monthByCat, groups: monthGroups,
     dayRates: monthDayRates,
     totalWeeks: weekTrend.length,
   };
 }
 
-/* 组装 AI 分析用的明细上下文 */
-function buildAiContextData(biz, wk) {
+/* ==================== 组装 AI 上下文（按 focus 过滤数据） ==================== */
+function buildAiContextData(biz, wk, focus) {
+  focus = focus || '综合';
   const src = bizToSrc(biz);
   const prevWk = wk - 1;
-  const out = { biz, wk, prevWk, emps: [], groups: [], aht2: [], byCat: {}, baseline: {} };
+  const out = { biz, wk, prevWk, focus, emps: [], groups: [], aht2: [], byCat: {}, baseline: {} };
 
-  const a = s30AnalysisData(biz, wk);
-  if (a) {
-    out.s30 = {
-      totNum: a.totNum, totDen: a.totDen, totRate: a.totRate,
-      th: a.th, hit: a.hit, gapNum: a.gapNum,
-      totFc: a.totFc, totBias: a.totBias,
-      days: a.days.map(d => ({
-        date: d.date, rate: d.rate, miss: d.miss,
-        den: d.den, forecast: d.forecast, bias: d.bias, hit: d.hit,
-      })),
-      periods: a.periods.map(p => ({
-        period: p.period, rate: p.rate, miss: p.miss,
-        den: p.den, forecast: p.forecast, bias: p.bias,
-      })),
-      emps: a.emps.slice(0, 15).map(e => ({ name: e.name, rate: e.rate, miss: e.miss, den: e.den })),
-      fcBuckets: a.fcBuckets,
-      impacts: (function () {
-        try {
-          const list = computeOverForecastImpactDetail(a);
-          return list.slice(0, 12).map(x => ({
-            date: x.date, period: x.period,
-            forecast: x.forecast, den: x.den, bias: x.bias,
-            miss: x.miss, rate: x.rate,
-            dayImpact: x.dayImpact, weekImpact: x.weekImpact,
-          }));
-        } catch (_) { return []; }
-      })(),
-    };
+  const need30S     = (focus === '30S' || focus === '综合' || focus === '对比');
+  const needAHT     = (focus === 'AHT' || focus === '综合' || focus === '对比');
+  const needQuality = (focus === '质量' || focus === '综合' || focus === '对比');
+  const needAll     = (focus === '综合' || focus === '对比');
+
+  /* ① 30S 明细 */
+  if (need30S) {
+    const a = s30AnalysisData(biz, wk);
+    if (a) {
+      out.s30 = {
+        totNum: a.totNum, totDen: a.totDen, totRate: a.totRate,
+        th: a.th, hit: a.hit, gapNum: a.gapNum,
+        totFc: a.totFc, totBias: a.totBias,
+        days: a.days.map(d => ({
+          date: d.date, rate: d.rate, miss: d.miss,
+          den: d.den, forecast: d.forecast, bias: d.bias, hit: d.hit,
+        })),
+        periods: a.periods.map(p => ({
+          period: p.period, rate: p.rate, miss: p.miss,
+          den: p.den, forecast: p.forecast, bias: p.bias,
+        })),
+        emps: a.emps.slice(0, 15).map(e => ({ name: e.name, rate: e.rate, miss: e.miss, den: e.den })),
+        fcBuckets: a.fcBuckets,
+        impacts: (function () {
+          try {
+            const list = computeOverForecastImpactDetail(a);
+            return list.slice(0, 12).map(x => ({
+              date: x.date, period: x.period,
+              forecast: x.forecast, den: x.den, bias: x.bias,
+              miss: x.miss, rate: x.rate,
+              dayImpact: x.dayImpact, weekImpact: x.weekImpact,
+            }));
+          } catch (_) { return []; }
+        })(),
+      };
+    }
   }
 
+  /* ② 4 周基线 */
   try {
     const wks = [];
     for (let i = 0; i < 4; i++) {
@@ -1826,42 +1858,54 @@ function buildAiContextData(biz, wk) {
       const c = calcBySrc(src, { wkSet: new Set([w]) });
       if (c.caseVolume === 0 && c.s30Den === 0) continue;
       const s30 = calcByL1(biz, { wkSet: new Set([w]) });
-      wks.push({
+      const row = {
         wk: w,
-        caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-        concurrency: c.concurrency, utilization: c.utilization,
-        solveRate: c.solveRate, satisfaction: c.satisfaction,
-        qualityPassRate: c.qualityPassRate,
-        s30Rate: s30.s30Rate, s30Num: s30.s30Num, s30Den: s30.s30Den, s30Miss: s30.s30Miss,
-      });
+        caseVolume: c.caseVolume,
+      };
+      if (needAHT) {
+        row.cpd = c.cpd; row.aht = c.aht;
+        row.concurrency = c.concurrency; row.utilization = c.utilization;
+      }
+      if (needQuality) {
+        row.solveRate = c.solveRate; row.satisfaction = c.satisfaction;
+        row.qualityPassRate = c.qualityPassRate;
+      }
+      if (need30S) {
+        row.s30Rate = s30.s30Rate; row.s30Num = s30.s30Num;
+        row.s30Den = s30.s30Den; row.s30Miss = s30.s30Miss;
+      }
+      wks.push(row);
     }
     out.baseline.weeks = wks;
-    const dayBaseline = {};
-    for (const w of wks) {
-      if (w.wk === wk) continue;
-      for (let i = 0; i < 7; i++) {
-        const d = dateAdd(wkStartDate(w.wk), i);
-        if (!d) continue;
-        const recs = S.records.filter(r => r.biz === biz && r.date === d);
-        if (!recs.length) continue;
-        let n = 0, den = 0;
-        for (const r of recs) { n += r.s30Num; den += r.s30Den; }
-        if (den <= 0) continue;
-        const key = weekdayOf(d);
-        if (!dayBaseline[key]) dayBaseline[key] = { rates: [], n: 0 };
-        dayBaseline[key].rates.push(n / den);
-        dayBaseline[key].n++;
+    if (need30S) {
+      const dayBaseline = {};
+      for (const w of wks) {
+        if (w.wk === wk) continue;
+        for (let i = 0; i < 7; i++) {
+          const d = dateAdd(wkStartDate(w.wk), i);
+          if (!d) continue;
+          const recs = S.records.filter(r => r.biz === biz && r.date === d);
+          if (!recs.length) continue;
+          let n = 0, den = 0;
+          for (const r of recs) { n += r.s30Num; den += r.s30Den; }
+          if (den <= 0) continue;
+          const key = weekdayOf(d);
+          if (!dayBaseline[key]) dayBaseline[key] = { rates: [], n: 0 };
+          dayBaseline[key].rates.push(n / den);
+          dayBaseline[key].n++;
+        }
       }
-    }
-    out.baseline.dayOfWeek = {};
-    for (const k in dayBaseline) {
-      const arr = dayBaseline[k].rates;
-      if (!arr.length) continue;
-      const avg = arr.reduce((s, x) => s + x, 0) / arr.length;
-      out.baseline.dayOfWeek[k] = { avg, min: Math.min.apply(null, arr), max: Math.max.apply(null, arr), n: arr.length };
+      out.baseline.dayOfWeek = {};
+      for (const k in dayBaseline) {
+        const arr = dayBaseline[k].rates;
+        if (!arr.length) continue;
+        const avg = arr.reduce((s, x) => s + x, 0) / arr.length;
+        out.baseline.dayOfWeek[k] = { avg, min: Math.min.apply(null, arr), max: Math.max.apply(null, arr), n: arr.length };
+      }
     }
   } catch (_) {}
 
+  /* ③ 员工明细 */
   const srcEmps = srcEmployeeSet(src);
   const allEmps = S.roster.filter(e => employeeVisible(e) && srcEmps.has(e.name));
   for (const e of allEmps) {
@@ -1869,74 +1913,122 @@ function buildAiContextData(biz, wk) {
     const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
     const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
     if (c.caseVolume === 0 && p.caseVolume === 0) continue;
-    out.emps.push({
-      name: e.name, group: e.group || '—', category: categoryOf(e, S.month) || '—',
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, solveRate: c.solveRate,
-      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
-      prevCaseVolume: p.caseVolume, prevCpd: p.cpd, prevAht: p.aht,
-      prevSolveRate: p.solveRate, prevSatisfaction: p.satisfaction,
-    });
+    const row = { name: e.name, group: e.group || '—', category: categoryOf(e, S.month) || '—' };
+    if (needAHT || needAll) {
+      row.caseVolume = c.caseVolume; row.cpd = c.cpd; row.aht = c.aht;
+      row.concurrency = c.concurrency;
+      row.prevCaseVolume = p.caseVolume; row.prevCpd = p.cpd; row.prevAht = p.aht;
+    }
+    if (needQuality || needAll) {
+      row.solveRate = c.solveRate; row.satisfaction = c.satisfaction;
+      row.qualityPassRate = c.qualityPassRate;
+      row.prevSolveRate = p.solveRate; row.prevSatisfaction = p.satisfaction;
+    }
+    if (focus === '30S') {
+      const s30 = calcByL1(biz, { nameSet, wkSet: new Set([wk]) });
+      row.s30Rate = s30.s30Rate; row.s30Den = s30.s30Den; row.s30Miss = s30.s30Miss;
+    }
+    out.emps.push(row);
   }
 
+  /* ④ 分类明细 */
   for (const cat of ['首月','次月','老人']) {
     const names = allEmps.filter(e => (categoryOf(e, S.month) || '').includes(cat)).map(e => e.name);
     if (!names.length) continue;
     const nameSet = new Set(names);
     const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
     const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
-    out.byCat[cat] = {
-      count: names.length,
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, solveRate: c.solveRate,
-      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
-      prevCpd: p.cpd, prevAht: p.aht, prevSolveRate: p.solveRate, prevSatisfaction: p.satisfaction,
-    };
+    const row = { count: names.length };
+    if (needAHT || needAll) {
+      row.caseVolume = c.caseVolume; row.cpd = c.cpd; row.aht = c.aht;
+      row.concurrency = c.concurrency;
+      row.prevCpd = p.cpd; row.prevAht = p.aht;
+    }
+    if (needQuality || needAll) {
+      row.solveRate = c.solveRate; row.satisfaction = c.satisfaction;
+      row.qualityPassRate = c.qualityPassRate;
+      row.prevSolveRate = p.solveRate; row.prevSatisfaction = p.satisfaction;
+    }
+    out.byCat[cat] = row;
   }
 
+  /* ⑤ 组别明细 */
   const groupMap = {};
   for (const e of allEmps) { const g = e.group || '—'; (groupMap[g] = groupMap[g] || []).push(e.name); }
   out.groups = Object.keys(groupMap).sort().map(g => {
     const nameSet = new Set(groupMap[g]);
     const c = calcBySrc(src, { nameSet, wkSet: new Set([wk]) });
     const p = calcBySrc(src, { nameSet, wkSet: new Set([prevWk]) });
-    return {
-      name: g, count: nameSet.size,
-      caseVolume: c.caseVolume, cpd: c.cpd, aht: c.aht,
-      concurrency: c.concurrency, solveRate: c.solveRate,
-      satisfaction: c.satisfaction, qualityPassRate: c.qualityPassRate,
-      prevCpd: p.cpd, prevAht: p.aht,
-    };
-  }).filter(g => g.caseVolume > 0);
+    const row = { name: g, count: nameSet.size };
+    if (needAHT || needAll) {
+      row.caseVolume = c.caseVolume; row.cpd = c.cpd; row.aht = c.aht;
+      row.concurrency = c.concurrency;
+      row.prevCpd = p.cpd; row.prevAht = p.aht;
+    }
+    if (needQuality || needAll) {
+      row.solveRate = c.solveRate; row.satisfaction = c.satisfaction;
+      row.qualityPassRate = c.qualityPassRate;
+    }
+    return row;
+  }).filter(g => g.caseVolume != null ? g.caseVolume > 0 : true);
 
-  try {
-    const aht2 = aht2ByWeek(biz, wk);
-    out.aht2 = aht2.list.filter(o => o.volNow > 0 || o.volPrev > 0)
-      .sort((x, y) => Math.abs(y.impact || 0) - Math.abs(x.impact || 0))
-      .slice(0, 15)
-      .map(o => ({ l1: o.l1, l2: o.l2, ahtNow: o.ahtNow, ahtPrev: o.ahtPrev, volNow: o.volNow, volPrev: o.volPrev, impact: o.impact }));
-  } catch (_) {}
+  /* ⑥ 二级打点 AHT */
+  if (needAHT) {
+    try {
+      const aht2 = aht2ByWeek(biz, wk);
+      out.aht2 = aht2.list.filter(o => o.volNow > 0 || o.volPrev > 0)
+        .sort((x, y) => Math.abs(y.impact || 0) - Math.abs(x.impact || 0))
+        .slice(0, 15)
+        .map(o => ({ l1: o.l1, l2: o.l2, ahtNow: o.ahtNow, ahtPrev: o.ahtPrev, volNow: o.volNow, volPrev: o.volPrev, impact: o.impact }));
+    } catch (_) {}
+  }
 
+  /* ⑦ 整体 */
   const wkCur  = calcBySrc(src, { wkSet: new Set([wk]) });
   const wkPrev = calcBySrc(src, { wkSet: new Set([prevWk]) });
-  out.overall = {
-    cur:  { caseVolume: wkCur.caseVolume,  cpd: wkCur.cpd,  aht: wkCur.aht,  concurrency: wkCur.concurrency,  utilization: wkCur.utilization,  solveRate: wkCur.solveRate,  satisfaction: wkCur.satisfaction,  qualityPassRate: wkCur.qualityPassRate },
-    prev: { caseVolume: wkPrev.caseVolume, cpd: wkPrev.cpd, aht: wkPrev.aht, concurrency: wkPrev.concurrency, utilization: wkPrev.utilization, solveRate: wkPrev.solveRate, satisfaction: wkPrev.satisfaction, qualityPassRate: wkPrev.qualityPassRate },
-  };
+  const curRow = { caseVolume: wkCur.caseVolume };
+  const prevRow = { caseVolume: wkPrev.caseVolume };
+  if (needAHT || needAll) {
+    curRow.cpd = wkCur.cpd; curRow.aht = wkCur.aht;
+    curRow.concurrency = wkCur.concurrency; curRow.utilization = wkCur.utilization;
+    prevRow.cpd = wkPrev.cpd; prevRow.aht = wkPrev.aht;
+    prevRow.concurrency = wkPrev.concurrency; prevRow.utilization = wkPrev.utilization;
+  }
+  if (needQuality || needAll) {
+    curRow.solveRate = wkCur.solveRate; curRow.satisfaction = wkCur.satisfaction;
+    curRow.qualityPassRate = wkCur.qualityPassRate;
+    prevRow.solveRate = wkPrev.solveRate; prevRow.satisfaction = wkPrev.satisfaction;
+    prevRow.qualityPassRate = wkPrev.qualityPassRate;
+  }
+  out.overall = { cur: curRow, prev: prevRow };
 
+  /* ⑧ 月度上下文 */
   try {
-    const monthCtx = buildMonthContext(biz, wk);
+    const monthCtx = buildMonthContext(biz, wk, focus);
     if (monthCtx) out.month = monthCtx;
   } catch (_) {}
 
   return out;
 }
 
-/* ==================== AI Prompt 组装 ==================== */
+/* ==================== AI Prompt 组装（含范围约束） ==================== */
 function buildStage1Prompt(biz, wk, focus, ctx) {
+  const scopeMap = {
+    '综合': '所有维度',
+    '30S':  '**仅限 30S 接起率相关**（接起率、Miss、预测偏差、时段分布、员工接起率、超预测影响）。不得提及 AHT / CPD / 解决率 / 满意度 / 质检率等其他指标。',
+    'AHT':  '**仅限 AHT 与人效相关**（AHT 数值与环比、二级打点 AHT 影响值、CPD、并发、工时利用率、CASE 处理量）。不得提及 30S 接起率 / 解决率 / 满意度 / 质检率。',
+    '质量': '**仅限质量指标**（解决率、满意度、质检合格率、首月/次月/老人分类差异）。不得提及 30S 接起率 / AHT / CPD。',
+    '对比': '所有指标的环比变化（本周 vs 上周 vs 本月均值）。',
+  };
+  const scopeText = scopeMap[focus] || scopeMap['综合'];
+
   const system = [
     '你是资深客服数据运营分析师。现在是**第一阶段：异常扫描**。',
     '你的唯一任务是：从给定的本周 + 月度背景数据中，**系统性地找出所有值得进一步分析的异常点**。',
+    '',
+    '【范围约束（最高优先级）】',
+    '本次分析范围：' + scopeText,
+    '范围外的指标，即使数据里有异常，也**绝对不要**出现在输出中。',
     '',
     '【异常定义】满足以下任一条件即为异常，必须列出：',
     '- 日度：单日指标偏离该星期几的近 4 周均值超过 5%，**或偏离本月均值超过 8%**',
@@ -1967,7 +2059,8 @@ function buildStage1Prompt(biz, wk, focus, ctx) {
     '3. 按严重度降序（gap 越大越靠前）；',
     '4. 只输出 JSON，不要解释文字。',
   ].join('\n');
-  const user = '业务线：' + biz + '\n周次：WK' + wk + '\n\n=== 数据 ===\n\n' + formatAiContext(ctx) + '\n\n请输出 JSON。';
+
+  const user = '业务线：' + biz + '\n周次：WK' + wk + '\n分析范围：' + focus + '\n\n=== 数据 ===\n\n' + formatAiContext(ctx) + '\n\n请输出 JSON。';
   return [
     { role: 'system', content: system },
     { role: 'user', content: user },
@@ -1984,9 +2077,23 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
   };
   const focusText = focusMap[focus] || focusMap['综合'];
 
+  const scopeMap = {
+    '综合': '所有维度',
+    '30S':  '**仅限 30S 接起率相关**。不得提及 AHT / CPD / 解决率 / 满意度 / 质检率等其他指标。',
+    'AHT':  '**仅限 AHT 与人效相关**（AHT、二级打点影响值、CPD、并发、工时利用率）。不得提及 30S 接起率 / 解决率 / 满意度 / 质检率。',
+    '质量': '**仅限质量指标**（解决率、满意度、质检合格率、分类差异）。不得提及 30S 接起率 / AHT / CPD。',
+    '对比': '所有指标的环比变化。',
+  };
+  const scopeText = scopeMap[focus] || scopeMap['综合'];
+
   const system = [
     '你是资深客服数据运营分析师。现在是**第二阶段：深度归因**。',
     '第一阶段已识别出以下异常点，你的任务是逐一深度分析。',
+    '',
+    '【⚠️ 范围约束（最高优先级）】',
+    '本次分析范围：' + scopeText,
+    '范围外的指标，即使数据里有异常，也**绝对不要**出现在报告中。',
+    '如果第一阶段的异常列表中包含范围外的指标，直接跳过，不要分析。',
     '',
     '【分析框架（每个异常必须严格按此展开）】',
     '### N. [异常标题]',
@@ -2017,7 +2124,7 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
     '',
     anomalyList,
     '',
-    '=== 本周完整明细数据 + 月度背景 ===',
+    '=== 本周完整明细数据 + 月度背景（' + focus + '模式） ===',
     '',
     formatAiContext(ctx),
     '',
@@ -2036,22 +2143,36 @@ function buildStage2Prompt(biz, wk, focus, ctx, anomalies) {
   ];
 }
 
-/* ==================== AI 上下文格式化 ==================== */
+/* ==================== AI 上下文格式化（按 focus 精简） ==================== */
 function formatAiContext(ctx) {
   const lines = [];
+  const focus = ctx.focus || '综合';
   const n2 = v => (v == null || !isFinite(v)) ? '—' : (typeof v === 'number' ? v.toFixed(2) : String(v));
   const p2 = v => (v == null || !isFinite(v)) ? '—' : (v * 100).toFixed(2) + '%';
   const i0 = v => (v == null || !isFinite(v)) ? '—' : String(Math.round(v));
   const sgn = v => (v == null || !isFinite(v)) ? '—' : ((v >= 0 ? '+' : '') + n2(v));
 
+  const need30S     = !!ctx.s30;
+  const needAHT     = !!(ctx.aht2 && ctx.aht2.length) || focus === 'AHT';
+  const needQuality = !!(ctx.byCat && Object.keys(ctx.byCat).some(k => ctx.byCat[k] && ctx.byCat[k].solveRate != null));
+
+  /* 基线 */
   if (ctx.baseline && ctx.baseline.weeks && ctx.baseline.weeks.length) {
     lines.push('【近 4 周基线（含本周，帮判断异常）】');
-    lines.push('  WK   | CASE | CPD  | AHT  | 并发 | 利用率 | 解决率 | 满意度 | 质检率 | 30S接起率');
+    const cols = ['WK', 'CASE'];
+    if (needAHT) cols.push('CPD', 'AHT', '并发', '利用率');
+    if (needQuality) cols.push('解决率', '满意度', '质检率');
+    if (need30S) cols.push('30S接起率');
+    lines.push('  ' + cols.join(' | '));
     for (const w of ctx.baseline.weeks) {
-      lines.push('  WK' + w.wk + ' | ' + i0(w.caseVolume) + ' | ' + n2(w.cpd) + ' | ' + n2(w.aht) + ' | ' + n2(w.concurrency) + ' | ' + p2(w.utilization) + ' | ' + p2(w.solveRate) + ' | ' + p2(w.satisfaction) + ' | ' + p2(w.qualityPassRate) + ' | ' + p2(w.s30Rate));
+      const arr = ['WK' + w.wk, i0(w.caseVolume)];
+      if (needAHT) arr.push(n2(w.cpd), n2(w.aht), n2(w.concurrency), p2(w.utilization));
+      if (needQuality) arr.push(p2(w.solveRate), p2(w.satisfaction), p2(w.qualityPassRate));
+      if (need30S) arr.push(p2(w.s30Rate));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
-    if (ctx.baseline.dayOfWeek && Object.keys(ctx.baseline.dayOfWeek).length) {
+    if (need30S && ctx.baseline.dayOfWeek && Object.keys(ctx.baseline.dayOfWeek).length) {
       lines.push('【30S 按星期几的近 4 周基线（用于判断某天算不算异常）】');
       lines.push('  星期 | 均值 | 最小 | 最大 | 样本数');
       for (const k of ['一','二','三','四','五','六','日']) {
@@ -2063,19 +2184,25 @@ function formatAiContext(ctx) {
     }
   }
 
+  /* 整体 */
   const { cur, prev } = ctx.overall;
   lines.push('【整体指标 · 本周 vs 上周】');
   lines.push('  指标         | 本周      | 上周      | 变化');
   lines.push('  CASE处理量   | ' + i0(cur.caseVolume) + ' | ' + i0(prev.caseVolume) + ' | ' + sgn(cur.caseVolume - prev.caseVolume));
-  lines.push('  CPD          | ' + n2(cur.cpd) + ' | ' + n2(prev.cpd) + ' | ' + sgn(cur.cpd != null && prev.cpd != null ? cur.cpd - prev.cpd : null));
-  lines.push('  AHT          | ' + n2(cur.aht) + ' | ' + n2(prev.aht) + ' | ' + sgn(cur.aht != null && prev.aht != null ? cur.aht - prev.aht : null));
-  lines.push('  并发         | ' + n2(cur.concurrency) + ' | ' + n2(prev.concurrency) + ' | ' + sgn(cur.concurrency != null && prev.concurrency != null ? cur.concurrency - prev.concurrency : null));
-  lines.push('  工时利用率   | ' + p2(cur.utilization) + ' | ' + p2(prev.utilization));
-  lines.push('  解决率       | ' + p2(cur.solveRate) + ' | ' + p2(prev.solveRate));
-  lines.push('  满意度       | ' + p2(cur.satisfaction) + ' | ' + p2(prev.satisfaction));
-  lines.push('  质检合格率   | ' + p2(cur.qualityPassRate) + ' | ' + p2(prev.qualityPassRate));
+  if (needAHT) {
+    lines.push('  CPD          | ' + n2(cur.cpd) + ' | ' + n2(prev.cpd) + ' | ' + sgn(cur.cpd != null && prev.cpd != null ? cur.cpd - prev.cpd : null));
+    lines.push('  AHT          | ' + n2(cur.aht) + ' | ' + n2(prev.aht) + ' | ' + sgn(cur.aht != null && prev.aht != null ? cur.aht - prev.aht : null));
+    lines.push('  并发         | ' + n2(cur.concurrency) + ' | ' + n2(prev.concurrency) + ' | ' + sgn(cur.concurrency != null && prev.concurrency != null ? cur.concurrency - prev.concurrency : null));
+    lines.push('  工时利用率   | ' + p2(cur.utilization) + ' | ' + p2(prev.utilization));
+  }
+  if (needQuality) {
+    lines.push('  解决率       | ' + p2(cur.solveRate) + ' | ' + p2(prev.solveRate));
+    lines.push('  满意度       | ' + p2(cur.satisfaction) + ' | ' + p2(prev.satisfaction));
+    lines.push('  质检合格率   | ' + p2(cur.qualityPassRate) + ' | ' + p2(prev.qualityPassRate));
+  }
   lines.push('');
 
+  /* 30S 明细 */
   if (ctx.s30) {
     const s = ctx.s30;
     lines.push('【30S 接起率 · 整体】');
@@ -2116,36 +2243,60 @@ function formatAiContext(ctx) {
     }
   }
 
+  /* 分类明细 */
   if (ctx.byCat && Object.keys(ctx.byCat).length) {
     lines.push('【分类明细（本周）】');
-    lines.push('  分类 | 人数 | CASE | CPD(本周/上周) | AHT(本周/上周) | 解决率(本周/上周) | 满意度(本周/上周)');
+    const cols = ['分类', '人数', 'CASE'];
+    if (needAHT) cols.push('CPD(本周/上周)', 'AHT(本周/上周)');
+    if (needQuality) cols.push('解决率(本周/上周)', '满意度(本周/上周)');
+    lines.push('  ' + cols.join(' | '));
     for (const cat of ['首月','次月','老人']) {
       const c = ctx.byCat[cat];
       if (!c) continue;
-      lines.push('  ' + cat + ' | ' + c.count + ' | ' + i0(c.caseVolume) + ' | ' + n2(c.cpd) + '/' + n2(c.prevCpd) + ' | ' + n2(c.aht) + '/' + n2(c.prevAht) + ' | ' + p2(c.solveRate) + '/' + p2(c.prevSolveRate) + ' | ' + p2(c.satisfaction) + '/' + p2(c.prevSatisfaction));
+      const arr = [cat, c.count, i0(c.caseVolume)];
+      if (needAHT) arr.push(n2(c.cpd) + '/' + n2(c.prevCpd), n2(c.aht) + '/' + n2(c.prevAht));
+      if (needQuality) arr.push(p2(c.solveRate) + '/' + p2(c.prevSolveRate), p2(c.satisfaction) + '/' + p2(c.prevSatisfaction));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
 
+  /* 组别明细 */
   if (ctx.groups && ctx.groups.length) {
     lines.push('【组别明细（本周）】');
-    lines.push('  组别 | 人数 | CASE | CPD(本周/上周) | AHT | 解决率 | 满意度');
+    const cols = ['组别', '人数', 'CASE'];
+    if (needAHT) cols.push('CPD(本周/上周)', 'AHT');
+    if (needQuality) cols.push('解决率', '满意度');
+    lines.push('  ' + cols.join(' | '));
     for (const g of ctx.groups) {
-      lines.push('  ' + g.name + ' | ' + g.count + ' | ' + i0(g.caseVolume) + ' | ' + n2(g.cpd) + '/' + n2(g.prevCpd) + ' | ' + n2(g.aht) + ' | ' + p2(g.solveRate) + ' | ' + p2(g.satisfaction));
+      const arr = [g.name, g.count, i0(g.caseVolume)];
+      if (needAHT) arr.push(n2(g.cpd) + '/' + n2(g.prevCpd), n2(g.aht));
+      if (needQuality) arr.push(p2(g.solveRate), p2(g.satisfaction));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
 
+  /* 员工明细 */
   if (ctx.emps && ctx.emps.length) {
-    const sorted = ctx.emps.slice().sort((a, b) => b.caseVolume - a.caseVolume).slice(0, 25);
-    lines.push('【员工明细 · 按 CASE 降序 Top 25】');
-    lines.push('  姓名 | 组别 | 分类 | CASE | CPD | AHT | 解决率 | 满意度 | 质检率 | 上周CPD');
+    const sorted = ctx.emps.slice().sort((a, b) => (b.caseVolume || 0) - (a.caseVolume || 0)).slice(0, 25);
+    lines.push('【员工明细 · Top 25】');
+    const cols = ['姓名', '组别', '分类'];
+    if (needAHT) cols.push('CASE', 'CPD', 'AHT', '并发', '上周CPD');
+    if (needQuality) cols.push('解决率', '满意度', '质检率');
+    if (focus === '30S') cols.push('接起率', 'Miss', '服务量');
+    lines.push('  ' + cols.join(' | '));
     for (const e of sorted) {
-      lines.push('  ' + e.name + ' | ' + e.group + ' | ' + e.category + ' | ' + i0(e.caseVolume) + ' | ' + n2(e.cpd) + ' | ' + n2(e.aht) + ' | ' + p2(e.solveRate) + ' | ' + p2(e.satisfaction) + ' | ' + p2(e.qualityPassRate) + ' | ' + n2(e.prevCpd));
+      const arr = [e.name, e.group, e.category];
+      if (needAHT) arr.push(i0(e.caseVolume), n2(e.cpd), n2(e.aht), n2(e.concurrency), n2(e.prevCpd));
+      if (needQuality) arr.push(p2(e.solveRate), p2(e.satisfaction), p2(e.qualityPassRate));
+      if (focus === '30S') arr.push(p2(e.s30Rate), i0(e.s30Miss), i0(e.s30Den));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
 
+  /* 二级打点 AHT */
   if (ctx.aht2 && ctx.aht2.length) {
     lines.push('【二级打点 AHT · 按影响绝对值 Top 15】');
     lines.push('  一级 | 二级 | AHT(本周/上周) | 服务量(本周/上周) | 影响值');
@@ -2156,6 +2307,7 @@ function formatAiContext(ctx) {
     lines.push('');
   }
 
+  /* 月度 */
   if (ctx.month) {
     lines.push('');
     lines.push(formatMonthContext(ctx.month));
@@ -2175,41 +2327,73 @@ function formatMonthContext(monthCtx) {
   const s = monthCtx.summary;
   lines.push('  指标         | 月度值');
   lines.push('  CASE处理量   | ' + i0(s.caseVolume));
-  lines.push('  CPD          | ' + n2(s.cpd));
-  lines.push('  AHT          | ' + n2(s.aht));
-  lines.push('  并发         | ' + n2(s.concurrency));
-  lines.push('  工时利用率   | ' + p2(s.utilization));
-  lines.push('  解决率       | ' + p2(s.solveRate));
-  lines.push('  满意度       | ' + p2(s.satisfaction));
-  lines.push('  质检合格率   | ' + p2(s.qualityPassRate));
-  lines.push('  30S接起率    | ' + p2(s.s30Rate) + '（分子=' + i0(s.s30Num) + '，分母=' + i0(s.s30Den) + '，Miss=' + i0(s.s30Miss) + '）');
+  if (s.cpd != null) lines.push('  CPD          | ' + n2(s.cpd));
+  if (s.aht != null) lines.push('  AHT          | ' + n2(s.aht));
+  if (s.concurrency != null) lines.push('  并发         | ' + n2(s.concurrency));
+  if (s.utilization != null) lines.push('  工时利用率   | ' + p2(s.utilization));
+  if (s.solveRate != null) lines.push('  解决率       | ' + p2(s.solveRate));
+  if (s.satisfaction != null) lines.push('  满意度       | ' + p2(s.satisfaction));
+  if (s.qualityPassRate != null) lines.push('  质检合格率   | ' + p2(s.qualityPassRate));
+  if (s.s30Rate != null) lines.push('  30S接起率    | ' + p2(s.s30Rate) + '（分子=' + i0(s.s30Num) + '，分母=' + i0(s.s30Den) + '，Miss=' + i0(s.s30Miss) + '）');
   lines.push('');
 
   if (monthCtx.weekTrend.length > 1) {
     lines.push('【📈 本月各周趋势（共 ' + monthCtx.totalWeeks + ' 周）】');
-    lines.push('  WK    | CASE | CPD  | AHT  | 并发 | 解决率 | 满意度 | 质检率 | 30S接起率 | 30S Miss');
+    const cols = ['WK', 'CASE'];
+    if (s.cpd != null) cols.push('CPD');
+    if (s.aht != null) cols.push('AHT');
+    if (s.concurrency != null) cols.push('并发');
+    if (s.solveRate != null) cols.push('解决率');
+    if (s.satisfaction != null) cols.push('满意度');
+    if (s.qualityPassRate != null) cols.push('质检率');
+    if (s.s30Rate != null) cols.push('30S接起率', '30S Miss');
+    lines.push('  ' + cols.join(' | '));
     for (const w of monthCtx.weekTrend) {
-      lines.push('  WK' + w.wk + ' | ' + i0(w.caseVolume) + ' | ' + n2(w.cpd) + ' | ' + n2(w.aht) + ' | ' + n2(w.concurrency) + ' | ' + p2(w.solveRate) + ' | ' + p2(w.satisfaction) + ' | ' + p2(w.qualityPassRate) + ' | ' + p2(w.s30Rate) + ' | ' + i0(w.s30Miss));
+      const arr = ['WK' + w.wk, i0(w.caseVolume)];
+      if (s.cpd != null) arr.push(n2(w.cpd));
+      if (s.aht != null) arr.push(n2(w.aht));
+      if (s.concurrency != null) arr.push(n2(w.concurrency));
+      if (s.solveRate != null) arr.push(p2(w.solveRate));
+      if (s.satisfaction != null) arr.push(p2(w.satisfaction));
+      if (s.qualityPassRate != null) arr.push(p2(w.qualityPassRate));
+      if (s.s30Rate != null) arr.push(p2(w.s30Rate), i0(w.s30Miss));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
 
   if (monthCtx.byCat && Object.keys(monthCtx.byCat).length) {
     lines.push('【📊 本月分类明细】');
-    lines.push('  分类 | 人数 | CASE | CPD | AHT | 解决率 | 满意度 | 30S接起率');
+    const cols = ['分类', '人数', 'CASE'];
+    if (s.cpd != null) cols.push('CPD', 'AHT');
+    if (s.solveRate != null) cols.push('解决率', '满意度');
+    if (s.s30Rate != null) cols.push('30S接起率');
+    lines.push('  ' + cols.join(' | '));
     for (const cat of ['首月','次月','老人']) {
       const c = monthCtx.byCat[cat];
       if (!c) continue;
-      lines.push('  ' + cat + ' | ' + c.count + ' | ' + i0(c.caseVolume) + ' | ' + n2(c.cpd) + ' | ' + n2(c.aht) + ' | ' + p2(c.solveRate) + ' | ' + p2(c.satisfaction) + ' | ' + p2(c.s30Rate));
+      const arr = [cat, c.count, i0(c.caseVolume)];
+      if (s.cpd != null) arr.push(n2(c.cpd), n2(c.aht));
+      if (s.solveRate != null) arr.push(p2(c.solveRate), p2(c.satisfaction));
+      if (s.s30Rate != null) arr.push(p2(c.s30Rate));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
 
   if (monthCtx.groups && monthCtx.groups.length) {
     lines.push('【📊 本月组别明细】');
-    lines.push('  组别 | 人数 | CASE | CPD | AHT | 解决率 | 满意度 | 30S接起率');
+    const cols = ['组别', '人数', 'CASE'];
+    if (s.cpd != null) cols.push('CPD', 'AHT');
+    if (s.solveRate != null) cols.push('解决率', '满意度');
+    if (s.s30Rate != null) cols.push('30S接起率');
+    lines.push('  ' + cols.join(' | '));
     for (const g of monthCtx.groups) {
-      lines.push('  ' + g.name + ' | ' + g.count + ' | ' + i0(g.caseVolume) + ' | ' + n2(g.cpd) + ' | ' + n2(g.aht) + ' | ' + p2(g.solveRate) + ' | ' + p2(g.satisfaction) + ' | ' + p2(g.s30Rate));
+      const arr = [g.name, g.count, i0(g.caseVolume)];
+      if (s.cpd != null) arr.push(n2(g.cpd), n2(g.aht));
+      if (s.solveRate != null) arr.push(p2(g.solveRate), p2(g.satisfaction));
+      if (s.s30Rate != null) arr.push(p2(g.s30Rate));
+      lines.push('  ' + arr.join(' | '));
     }
     lines.push('');
   }
@@ -2257,9 +2441,10 @@ async function runAiAnalysis() {
   const biz = (bizEl && bizEl.value) || '买手合作';
   const wk = parseInt((wkEl && wkEl.value) || '', 10) || S.latestWK;
 
+  /* 组装上下文（传入 focus） */
   let ctx = null;
   try {
-    ctx = buildAiContextData(biz, wk);
+    ctx = buildAiContextData(biz, wk, focus);
     ctx._reportMd = reportToText(buildReport(biz, wk));
   } catch (e) {
     outEl.innerHTML = '<div class="ai-err">❌ 生成上下文失败：' + esc(e.message) + '</div>';
@@ -2306,7 +2491,7 @@ async function runAiAnalysis() {
       render();
     } else {
       /* 阶段 1 */
-      outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 / 2：扫描异常点…</div><div class="ai-cursor"></div>';
+      outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 / 2：扫描异常点…（范围：' + esc(focus) + '）</div><div class="ai-cursor"></div>';
       const stage1Messages = buildStage1Prompt(biz, wk, focus, ctx);
       let stage1Buf = '';
       let stage1Reason = '';
@@ -2317,7 +2502,7 @@ async function runAiAnalysis() {
           if (type === 'reasoning') stage1Reason += chunk;
           else stage1Buf += chunk;
           const show = stage1Buf || stage1Reason;
-          outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 / 2：扫描异常点…</div>' +
+          outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 / 2：扫描异常点…（范围：' + esc(focus) + '）</div>' +
             (s1Logs.length ? '<div style="font-size:11px;color:#999">' + s1Logs.slice(-2).map(esc).join('<br>') + '</div>' : '') +
             '<pre style="font-size:11px;color:#999;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto">' + esc(show.slice(-800)) + '</pre><div class="ai-cursor"></div>';
         },
@@ -2350,7 +2535,7 @@ async function runAiAnalysis() {
       }
 
       /* 阶段 2 */
-      outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 完成：识别出 <b>' + anomalies.length + '</b> 个异常点</div>' +
+      outEl.innerHTML = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0">🔍 阶段 1 完成：识别出 <b>' + anomalies.length + '</b> 个异常点（范围：' + esc(focus) + '）</div>' +
         '<div style="background:#FAF9F7;padding:10px 14px;border-radius:8px;border-left:3px solid #98A8CE;font-size:12px;line-height:1.8;margin-bottom:12px">' +
         anomalies.map((a, i) => '• [' + esc(a.type) + '] ' + esc(a.target) + ' · ' + esc(a.metric) + ' = ' + esc(String(a.value)) + '（基线 ' + esc(String(a.baseline)) + '）').join('<br>') +
         '</div>' +
@@ -2361,7 +2546,7 @@ async function runAiAnalysis() {
       let stage2Reason = '';
       const s2Logs = [];
       const render2 = () => {
-        const header = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0;border-bottom:1px dashed #ddd;margin-bottom:10px">🔍 阶段 1 识别出 <b>' + anomalies.length + '</b> 个异常点 · 🧠 阶段 2 深度归因</div>';
+        const header = '<div style="color:#7B8FBF;font-weight:600;padding:8px 0;border-bottom:1px dashed #ddd;margin-bottom:10px">🔍 阶段 1 识别出 <b>' + anomalies.length + '</b> 个异常点 · 🧠 阶段 2 深度归因（范围：' + esc(focus) + '）</div>';
         const dbg = s2Logs.length
           ? '<div style="font-size:11px;color:#999;padding:4px 0;border-bottom:1px dashed #eee;margin-bottom:6px">' + s2Logs.slice(-3).map(esc).join('<br>') + '</div>'
           : '';
