@@ -591,21 +591,115 @@ function renderS30() {
     return;
   }
   if (dates) {
-    dates.innerHTML = allDates.map(d => {
-      const on = S.s30Dates.has(d);
-      return '<span class="chip' + (on ? ' on' : '') + '" data-d="' + d + '">' + esc(d.slice(5)) + '</span>';
-    }).join('');
-    dates.querySelectorAll('.chip').forEach(ch => {
-      ch.addEventListener('click', () => {
-        const d = ch.dataset.d;
-        if (S.s30Dates.has(d)) S.s30Dates.delete(d); else S.s30Dates.add(d);
-        ch.classList.toggle('on');
-        renderS30Body(biz);
-      });
-    });
+    renderS30DateSelector(dates, allDates, biz);
   }
   renderS30Body(biz);
 }
+
+/* ==================== 30S 接起 · 日期选择器（按月度折叠） ==================== */
+function renderS30DateSelector(container, allDates, biz) {
+  if (!S.s30MonthOpen) S.s30MonthOpen = new Set();
+
+  /* 按月份分组 */
+  const byMonth = new Map();
+  for (const d of allDates) {
+    const m = d.slice(0, 7);
+    if (!byMonth.has(m)) byMonth.set(m, []);
+    byMonth.get(m).push(d);
+  }
+  const months = Array.from(byMonth.keys()).sort().reverse();
+
+  /* 清理无效月份；默认展开最新月份 */
+  for (const m of Array.from(S.s30MonthOpen)) if (!byMonth.has(m)) S.s30MonthOpen.delete(m);
+  if (S.s30MonthOpen.size === 0 && months.length) S.s30MonthOpen.add(months[0]);
+
+  const headBase = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:#F4F3EF;border-radius:8px;cursor:pointer;user-select:none;margin-bottom:6px;font-size:12.5px;';
+  const btnBase  = 'font-size:11px;padding:1px 8px;border:1px solid #E5E1DA;background:#FFFFFF;border-radius:6px;cursor:pointer;color:#77778A;font-family:inherit;line-height:1.6;';
+
+  let html = '';
+  for (const m of months) {
+    const list = byMonth.get(m).sort();
+    const open = S.s30MonthOpen.has(m);
+    const selCount = list.filter(d => S.s30Dates.has(d)).length;
+    html += '<div style="margin-bottom:10px">';
+    html += '<div class="s30-month-head" data-month="' + esc(m) + '" style="' + headBase + '">' +
+      '<span style="color:#7B8FBF;font-size:10px;width:12px;display:inline-block;text-align:center">' + (open ? '▼' : '▶') + '</span>' +
+      '<span style="font-weight:600;color:#33333D">📅 ' + esc(m) + '</span>' +
+      '<span class="s30-month-meta" style="color:#77778A;font-size:11.5px">共 ' + list.length + ' 天，已选 ' + selCount + ' 天</span>' +
+      '<span style="margin-left:auto;display:flex;gap:4px">' +
+        '<button type="button" class="btn-mini" style="' + btnBase + '" data-act="all" data-month="' + esc(m) + '">全选</button>' +
+        '<button type="button" class="btn-mini" style="' + btnBase + '" data-act="none" data-month="' + esc(m) + '">清空</button>' +
+      '</span>' +
+    '</div>';
+    if (open) {
+      html += '<div class="chips" style="margin:0">' + list.map(d => {
+        const on = S.s30Dates.has(d);
+        return '<span class="chip' + (on ? ' on' : '') + '" data-d="' + d + '">' + esc(d.slice(5)) + '</span>';
+      }).join('') + '</div>';
+    }
+    html += '</div>';
+  }
+  container.innerHTML = html;
+
+  /* 折叠头点击 */
+  container.querySelectorAll('.s30-month-head').forEach(head => {
+    head.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      const m = head.dataset.month;
+      if (S.s30MonthOpen.has(m)) S.s30MonthOpen.delete(m);
+      else S.s30MonthOpen.add(m);
+      renderS30DateSelector(container, allDates, biz);
+      renderS30Body(biz);
+    });
+  });
+
+  /* 全选 / 清空 */
+  container.querySelectorAll('button.btn-mini').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const m = btn.dataset.month;
+      const act = btn.dataset.act;
+      const list = byMonth.get(m) || [];
+      if (act === 'all') list.forEach(d => S.s30Dates.add(d));
+      else list.forEach(d => S.s30Dates.delete(d));
+
+      /* 更新计数 + 展开区里所有 chip 的状态 */
+      const head = container.querySelector('.s30-month-head[data-month="' + m + '"]');
+      if (head) {
+        const meta = head.querySelector('.s30-month-meta');
+        const selCount = list.filter(x => S.s30Dates.has(x)).length;
+        if (meta) meta.textContent = '共 ' + list.length + ' 天，已选 ' + selCount + ' 天';
+        const block = head.parentNode;
+        if (block) {
+          block.querySelectorAll('.chip').forEach(ch => {
+            ch.classList.toggle('on', S.s30Dates.has(ch.dataset.d));
+          });
+        }
+      }
+      renderS30Body(biz);
+    });
+  });
+
+  /* 单个 chip 点击 */
+  container.querySelectorAll('.chip').forEach(ch => {
+    ch.addEventListener('click', () => {
+      const d = ch.dataset.d;
+      if (S.s30Dates.has(d)) S.s30Dates.delete(d);
+      else S.s30Dates.add(d);
+      ch.classList.toggle('on');
+
+      /* 只更新该月份的计数，避免整段重渲染 */
+      const m = d.slice(0, 7);
+      const list = byMonth.get(m) || [];
+      const selCount = list.filter(x => S.s30Dates.has(x)).length;
+      const meta = container.querySelector('.s30-month-head[data-month="' + m + '"] .s30-month-meta');
+      if (meta) meta.textContent = '共 ' + list.length + ' 天，已选 ' + selCount + ' 天';
+
+      renderS30Body(biz);
+    });
+  });
+}
+
 function renderS30Body(biz) {
   const el = $('#s30Body');
   if (!el) return;
@@ -749,7 +843,7 @@ function renderAHT2() {
   const bizEl = $('#a2Biz');
   const biz = (bizEl && bizEl.value) || '买手合作';
   if (!S.records.length) { el.innerHTML = '<p class="muted">尚未导入数据。</p>'; return; }
-  const wkNow = S.latestWK;
+  const wkNow = S.latestWK || 1;
   const wkPrev = wkNow - 1;
 
   function bizAHT(wk) {
@@ -982,7 +1076,7 @@ function renderAttendance() {
   for (let i = 1; i <= daysInMonth; i++) days.push(S.month + '-' + pad2(i));
   let monthTotal = 0;
   for (const d of days) monthTotal += attOf(name, d);
-  const lastWK = S.latestWK;
+  const lastWK = S.latestWK || 1;
   const wkList = [lastWK-2, lastWK-1, lastWK];
   const wkDates = {};
   for (const w of wkList) wkDates[w] = [];
